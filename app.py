@@ -1,8 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
+from collections import Counter
+import re
 
 # ===================== PAGE CONFIG =====================
 
@@ -53,7 +56,7 @@ if "Please specify which of the funding bands is requested for the project?" in 
 if "Final Total" in df.columns:
     df["Final_Total"] = df["Final Total"]
 
-# Risk + explanation (new names vs old)
+# Risk + explanation (old/new names)
 if "Risk_Category" not in df.columns and "Risk" in df.columns:
     df["Risk_Category"] = df["Risk"]
 if "Risk_Explanation" not in df.columns and "Explanation" in df.columns:
@@ -142,7 +145,7 @@ if filtered_df.empty:
     st.warning("No projects left after applying filters.")
     st.stop()
 
-# ===================== BIG DIFFERENCE FLAG (≥ 4 IN ANY OF 5 ITEMS) =====================
+# ===================== BIG DIFFERENCE & MAX DIFF =====================
 
 big_diff_cols = [c for c in [
     "diff_Methods", "diff_Impact", "diff_Innovation", "diff_Plan", "diff_Team"
@@ -150,8 +153,10 @@ big_diff_cols = [c for c in [
 
 if big_diff_cols:
     filtered_df["Any_big_diff"] = (filtered_df[big_diff_cols].abs() >= 4).any(axis=1)
+    filtered_df["Max_diff"] = filtered_df[big_diff_cols].abs().max(axis=1)
 else:
     filtered_df["Any_big_diff"] = False
+    filtered_df["Max_diff"] = 0
 
 # ===================== TOP METRICS =====================
 
@@ -183,8 +188,16 @@ st.markdown("---")
 
 # ===================== TABS =====================
 
-tab_overview, tab_scores, tab_agreement, tab_risk, tab_comments = st.tabs(
-    ["📁 Overview", "📈 Score distribution", "⚖️ Reviewer agreement", "🚥 Risk & sentiment", "🗯️ Comment analysis"]
+tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision = st.tabs(
+    [
+        "📁 Overview",
+        "📈 Scores & funding",
+        "⚖️ Reviewer agreement",
+        "🚥 Risk & sentiment",
+        "🧬 Project profiles",
+        "🗯️ Comment insights",
+        "🧠 Decision support",
+    ]
 )
 
 # ---------- TAB 1: OVERVIEW ----------
@@ -204,10 +217,11 @@ with tab_overview:
 
     st.dataframe(view_df, use_container_width=True)
 
-# ---------- TAB 2: SCORE DISTRIBUTION ----------
+# ---------- TAB 2: SCORES & FUNDING ----------
 with tab_scores:
-    st.subheader("Score distribution")
+    st.subheader("Score distributions")
 
+    # Histogram & bar by project
     score_options = []
     if "Final_Total" in filtered_df.columns:
         score_options.append("Final_Total")
@@ -236,15 +250,40 @@ with tab_scores:
             fig_bar.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig_bar, use_container_width=True)
 
+    st.markdown("### Funding efficiency")
+
+    # Box plot: Final_Total by Funding_Band
+    if "Final_Total" in filtered_df.columns and "Funding_Band" in filtered_df.columns:
+        fig_box = px.box(
+            filtered_df,
+            x="Funding_Band",
+            y="Final_Total",
+            color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
+            title="Distribution of Final Scores by Funding Band",
+        )
+        st.plotly_chart(fig_box, use_container_width=True)
+    else:
+        st.info("Need 'Final_Total' and 'Funding_Band' for funding efficiency analysis.")
+
+    st.markdown("### Final score vs risk (bubble chart)")
+    if "Final_Total" in filtered_df.columns and "Risk_Category" in filtered_df.columns:
+        fig_bubble = px.scatter(
+            filtered_df,
+            x="Final_Total",
+            y="Risk_Category",
+            size="Innovation_avg" if "Innovation_avg" in filtered_df.columns else None,
+            color="Risk_Category",
+            hover_data=["Project_ID", "Project_Name", "Funding_Band"] if "Funding_Band" in filtered_df.columns else ["Project_ID", "Project_Name"],
+            title="Final score vs risk (bubble size = Innovation score)",
+        )
+        st.plotly_chart(fig_bubble, use_container_width=True)
+
 # ---------- TAB 3: REVIEWER AGREEMENT ----------
 with tab_agreement:
     st.subheader("Reviewer agreement (projects with ≥ 4-point difference in any item)")
 
     # Only projects that have at least one big diff in Methods/Impact/Innovation/Plan/Team
-    if "Any_big_diff" in filtered_df.columns:
-        big_df = filtered_df[filtered_df["Any_big_diff"]]
-    else:
-        big_df = pd.DataFrame()
+    big_df = filtered_df[filtered_df["Any_big_diff"]] if "Any_big_diff" in filtered_df.columns else pd.DataFrame()
 
     if big_df.empty:
         st.info("No projects with ≥ 4-point difference in any of Methods / Impact / Innovation / Plan / Team.")
@@ -258,7 +297,6 @@ with tab_agreement:
             "Team":       ("Team_50_review1",       "Team_50_review2",       "diff_Team"),
         }
 
-        # Keep only dimensions that actually exist
         dim_info = {
             name: (c1, c2, cdiff)
             for name, (c1, c2, cdiff) in dim_info.items()
@@ -295,6 +333,37 @@ with tab_agreement:
                     use_container_width=True,
                 )
 
+    st.markdown("### Average differences by criterion")
+    if big_diff_cols:
+        mean_diffs = filtered_df[big_diff_cols].abs().mean()
+        heat_df = pd.DataFrame({"Dimension": mean_diffs.index, "Mean_abs_diff": mean_diffs.values})
+        fig_heat = px.imshow(
+            [heat_df["Mean_abs_diff"].values],
+            x=heat_df["Dimension"],
+            y=["Avg diff"],
+            color_continuous_scale="Reds",
+            aspect="auto",
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+    st.markdown("### Reviewer 1 vs Reviewer 2 total score")
+    if "Total_51_review1" in filtered_df.columns and "Total_51_review2" in filtered_df.columns:
+        fig_r12 = px.scatter(
+            filtered_df,
+            x="Total_51_review1",
+            y="Total_51_review2",
+            hover_data=["Project_ID", "Project_Name"],
+            title="Reviewer 1 vs Reviewer 2 total scores",
+        )
+        fig_r12.add_shape(
+            type="line",
+            x0=filtered_df["Total_51_review1"].min(),
+            y0=filtered_df["Total_51_review1"].min(),
+            x1=filtered_df["Total_51_review1"].max(),
+            y1=filtered_df["Total_51_review1"].max(),
+        )
+        st.plotly_chart(fig_r12, use_container_width=True)
+
 # ---------- TAB 4: RISK & SENTIMENT ----------
 with tab_risk:
     st.subheader("Risk & sentiment overview")
@@ -313,7 +382,7 @@ with tab_risk:
     else:
         st.info("No risk/sentiment columns available.")
 
-    # Scatter, if we have numeric sentiment and final score
+    # Scatter: Final_Total vs sentiment
     if sentiment_num_col and sentiment_num_col in filtered_df.columns and "Final_Total" in filtered_df.columns:
         fig_scatter = px.scatter(
             filtered_df,
@@ -324,6 +393,19 @@ with tab_risk:
             title=f"Final_Total vs {sentiment_num_col}",
         )
         st.plotly_chart(fig_scatter, use_container_width=True)
+
+    # Violin: sentiment by risk category
+    st.markdown("### Sentiment distribution by risk")
+    if sentiment_num_col and sentiment_num_col in filtered_df.columns and "Risk_Category" in filtered_df.columns:
+        fig_violin = px.violin(
+            filtered_df,
+            x="Risk_Category",
+            y=sentiment_num_col,
+            box=True,
+            points="all",
+            title=f"{sentiment_num_col} distribution across risk categories",
+        )
+        st.plotly_chart(fig_violin, use_container_width=True)
 
     st.markdown("### Inspect single project")
     if "Project_Name" in filtered_df.columns:
@@ -354,9 +436,52 @@ with tab_risk:
             with st.expander("Risk explanation"):
                 st.write(row["Risk_Explanation"])
 
-# ---------- TAB 5: COMMENT ANALYSIS ----------
+# ---------- TAB 5: PROJECT PROFILES ----------
+with tab_profiles:
+    st.subheader("Per-project profiles")
+
+    # Radar chart
+    radar_cols = [c for c in ["Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg"] if c in filtered_df.columns]
+    if radar_cols and "Project_Name" in filtered_df.columns:
+        project_list = filtered_df["Project_Name"].dropna().unique().tolist()
+        selected_project = st.selectbox("Project for radar chart", project_list, key="radar_project")
+
+        proj_rows = filtered_df[filtered_df["Project_Name"] == selected_project]
+        row = proj_rows.iloc[0]
+
+        values = [row[c] for c in radar_cols]
+        categories = radar_cols
+
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill='toself',
+            name=selected_project
+        ))
+        fig_radar.update_layout(
+            polar=dict(radialaxis=dict(visible=True)),
+            title="Project performance radar"
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+    else:
+        st.info("Need average scores for Methods/Impact/Innovation/Plan/Team to draw radar chart.")
+
+    st.markdown("### Reviewer disagreement vs final score")
+    if "Max_diff" in filtered_df.columns and "Final_Total" in filtered_df.columns:
+        fig_md = px.scatter(
+            filtered_df,
+            x="Max_diff",
+            y="Final_Total",
+            color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
+            hover_data=["Project_ID", "Project_Name"],
+            title="Max reviewer disagreement vs Final Total",
+        )
+        st.plotly_chart(fig_md, use_container_width=True)
+
+# ---------- TAB 6: COMMENT INSIGHTS ----------
 with tab_comments:
-    st.subheader("🗯️ Comment analysis (word cloud)")
+    st.subheader("🗯️ Comment insights (word cloud & keywords)")
 
     # Identify comment/feedback/text columns
     comment_columns = []
@@ -365,7 +490,6 @@ with tab_comments:
         if any(k in lc for k in ["comment", "feedback", "text"]):
             comment_columns.append(col)
 
-    # Ensure these key ones are included if present
     for col in ["Combined_Comments", "Combined_Overall_Feedback", "All_Feedback_Text"]:
         if col in df.columns and col not in comment_columns:
             comment_columns.append(col)
@@ -394,7 +518,6 @@ with tab_comments:
             and "Project_Name" in filtered_df.columns
             and "Project_ID" in filtered_df.columns
         ):
-            # Parse the ID from "Title (ID: xxx)"
             try:
                 proj_id_str = proj_choice.split("ID:")[1].rstrip(")")
                 proj_id_str = proj_id_str.strip()
@@ -407,6 +530,7 @@ with tab_comments:
         if not all_text.strip():
             st.warning("No text in this column for the selected project(s).")
         else:
+            # Word cloud
             wordcloud = WordCloud(
                 width=1200, height=600, background_color="white", collocations=False
             ).generate(all_text)
@@ -417,7 +541,74 @@ with tab_comments:
             ax.axis("off")
             st.pyplot(fig)
 
+            # Simple keyword frequency bar chart
+            st.markdown("**Top keywords (frequency)**")
+            tokens = re.findall(r"\b\w+\b", all_text.lower())
+            stopwords = {
+                "the", "and", "for", "with", "that", "this", "are", "was", "were",
+                "but", "not", "have", "has", "had", "their", "they", "them",
+                "into", "from", "about", "there", "been", "will", "would",
+                "could", "should", "can", "may", "might", "such", "also",
+                "project", "study", "studies", "research"
+            }
+            words = [w for w in tokens if w not in stopwords and len(w) > 2]
+            if words:
+                freq = Counter(words).most_common(20)
+                freq_df = pd.DataFrame(freq, columns=["word", "count"])
+                fig_kw = px.bar(freq_df, x="word", y="count", title="Top 20 words in selected comments")
+                st.plotly_chart(fig_kw, use_container_width=True)
+            else:
+                st.info("No significant keywords to display.")
+
             if proj_choice == "All projects":
                 st.caption("Text aggregated across all filtered projects.")
             else:
                 st.caption(f"Text for: {proj_choice}")
+
+# ---------- TAB 7: DECISION SUPPORT ----------
+with tab_decision:
+    st.subheader("🧠 Decision-support ranking")
+
+    # Helper: column or zeros
+    def col_or_zero(name: str) -> pd.Series:
+        if name in filtered_df.columns:
+            return filtered_df[name]
+        return pd.Series(0, index=filtered_df.index)
+
+    # Risk penalty: High = 10, Medium = 5, else 0
+    if "Risk_Category" in filtered_df.columns:
+        rc = filtered_df["Risk_Category"].fillna("").str.lower()
+        risk_penalty = (
+            (rc.str.contains("high").astype(int) * 10)
+            + (rc.str.contains("medium").astype(int) * 5)
+        )
+    else:
+        risk_penalty = pd.Series(0, index=filtered_df.index)
+
+    decision_score = (
+        col_or_zero("Final_Total") * 0.7 +
+        col_or_zero("Innovation_avg") * 0.2 +
+        col_or_zero("Impact_avg") * 0.1 -
+        risk_penalty
+    )
+
+    filtered_df["Decision_Score"] = decision_score
+
+    top_n = st.slider("Number of projects to display", 5, min(20, len(filtered_df)), 10)
+    ranked = filtered_df.sort_values("Decision_Score", ascending=False).head(top_n)
+
+    st.markdown("**Ranked projects (higher = more favourable)**")
+    show_cols = [c for c in [
+        "Project_ID", "Project_Name",
+        "Decision_Score",
+        "Final_Total",
+        "Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg",
+        "Risk_Category",
+        "Funding_Band",
+    ] if c in ranked.columns]
+    st.dataframe(ranked[show_cols], use_container_width=True)
+
+    st.caption(
+        "Decision_Score = Final_Total (70%) + Innovation_avg (20%) + Impact_avg (10%) "
+        "– penalty for Medium/High risk. Adjust the formula in the code if you want different weights."
+    )
