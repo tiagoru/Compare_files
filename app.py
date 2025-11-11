@@ -5,6 +5,7 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
 # ===================== PAGE CONFIG =====================
+
 st.set_page_config(
     page_title="Project Review Dashboard",
     layout="wide"
@@ -14,13 +15,14 @@ st.title("📊 Project Review Dashboard")
 
 st.markdown(
     """
-Interactive dashboard for analysing project reviews, reviewer agreement, risk and comments.  
+Interactive dashboard for analysing project reviews, reviewer agreement, risk and comments.
 
 🔒 The Excel file you upload is used only in this session and is not stored.
 """
 )
 
 # ===================== FILE UPLOAD =====================
+
 uploaded_file = st.file_uploader("📁 Upload your Excel file", type=["xlsx", "xls"])
 
 if uploaded_file is None:
@@ -31,7 +33,7 @@ df = pd.read_excel(uploaded_file)
 
 # ===================== COLUMN ALIASES / CLEANUP =====================
 
-# Project name
+# Project title
 if "Research project title:" in df.columns:
     df["Project_Name"] = df["Research project title:"].astype(str)
 elif "Project title2" in df.columns:
@@ -51,13 +53,13 @@ if "Please specify which of the funding bands is requested for the project?" in 
 if "Final Total" in df.columns:
     df["Final_Total"] = df["Final Total"]
 
-# Risk aliases (old vs new naming)
+# Risk + explanation (new names vs old)
 if "Risk_Category" not in df.columns and "Risk" in df.columns:
     df["Risk_Category"] = df["Risk"]
 if "Risk_Explanation" not in df.columns and "Explanation" in df.columns:
     df["Risk_Explanation"] = df["Explanation"]
 
-# Sentiment aliases
+# Sentiment columns
 sentiment_num_col = None
 if "Sentiment_Polarity" in df.columns:
     sentiment_num_col = "Sentiment_Polarity"
@@ -66,7 +68,7 @@ elif "Sentiment_Score" in df.columns:
 
 sentiment_label_col = "Sentiment_Label" if "Sentiment_Label" in df.columns else None
 
-# ===================== DERIVED SCORE COLUMNS =====================
+# ===================== DERIVED SCORE COLUMNS (AVERAGE OF REVIEWERS) =====================
 
 # (label, reviewer1_column, reviewer2_column)
 score_pairs = [
@@ -140,6 +142,17 @@ if filtered_df.empty:
     st.warning("No projects left after applying filters.")
     st.stop()
 
+# ===================== BIG DIFFERENCE FLAG (≥ 4 IN ANY OF 5 ITEMS) =====================
+
+big_diff_cols = [c for c in [
+    "diff_Methods", "diff_Impact", "diff_Innovation", "diff_Plan", "diff_Team"
+] if c in filtered_df.columns]
+
+if big_diff_cols:
+    filtered_df["Any_big_diff"] = (filtered_df[big_diff_cols].abs() >= 4).any(axis=1)
+else:
+    filtered_df["Any_big_diff"] = False
+
 # ===================== TOP METRICS =====================
 
 col1, col2, col3, col4 = st.columns(4)
@@ -169,6 +182,7 @@ with col4:
 st.markdown("---")
 
 # ===================== TABS =====================
+
 tab_overview, tab_scores, tab_agreement, tab_risk, tab_comments = st.tabs(
     ["📁 Overview", "📈 Score distribution", "⚖️ Reviewer agreement", "🚥 Risk & sentiment", "🗯️ Comment analysis"]
 )
@@ -176,6 +190,7 @@ tab_overview, tab_scores, tab_agreement, tab_risk, tab_comments = st.tabs(
 # ---------- TAB 1: OVERVIEW ----------
 with tab_overview:
     st.subheader("Project overview (after filters)")
+
     cols_to_show = [c for c in [
         "Project_ID", "Project_Name", "Final_Total",
         "Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg",
@@ -205,6 +220,7 @@ with tab_scores:
         st.info("No numeric score columns found.")
     else:
         selected_score = st.selectbox("Select score to analyse", score_options)
+
         fig_hist = px.histogram(filtered_df, x=selected_score, nbins=15)
         st.plotly_chart(fig_hist, use_container_width=True)
 
@@ -222,51 +238,67 @@ with tab_scores:
 
 # ---------- TAB 3: REVIEWER AGREEMENT ----------
 with tab_agreement:
-    st.subheader("Reviewer agreement (only projects with > 4-point difference)")
+    st.subheader("Reviewer agreement (projects with ≥ 4-point difference in any item)")
 
-    dims_dict = {
-        label: (c1, c2)
-        for (label, c1, c2) in score_pairs
-        if c1 in df.columns and c2 in df.columns
-    }
-
-    if not dims_dict:
-        st.info("No reviewer 1 & 2 score pairs found.")
+    # Only projects that have at least one big diff in Methods/Impact/Innovation/Plan/Team
+    if "Any_big_diff" in filtered_df.columns:
+        big_df = filtered_df[filtered_df["Any_big_diff"]]
     else:
-        dim = st.selectbox("Dimension", list(dims_dict.keys()))
-        c1, c2 = dims_dict[dim]
+        big_df = pd.DataFrame()
 
-        temp = filtered_df[["Project_ID", "Project_Name", c1, c2]].dropna()
-        temp["abs_diff"] = (temp[c1] - temp[c2]).abs()
+    if big_df.empty:
+        st.info("No projects with ≥ 4-point difference in any of Methods / Impact / Innovation / Plan / Team.")
+    else:
+        # Dimension -> (reviewer1_col, reviewer2_col, diff_col)
+        dim_info = {
+            "Methods":    ("Methods_46_review1",    "Methods_46_review2",    "diff_Methods"),
+            "Impact":     ("Impact_47_review1",     "Impact_47_review2",     "diff_Impact"),
+            "Innovation": ("Innovation_48_review1", "Innovation_48_review2", "diff_Innovation"),
+            "Plan":       ("Plan_49_review1",       "Plan_49_review2",       "diff_Plan"),
+            "Team":       ("Team_50_review1",       "Team_50_review2",       "diff_Team"),
+        }
 
-        # 👉 only keep projects with abs diff > 4
-        temp = temp[temp["abs_diff"] > 4]
+        # Keep only dimensions that actually exist
+        dim_info = {
+            name: (c1, c2, cdiff)
+            for name, (c1, c2, cdiff) in dim_info.items()
+            if c1 in big_df.columns and c2 in big_df.columns and cdiff in big_df.columns
+        }
 
-        if temp.empty:
-            st.info(f"No projects with > 4-point difference in {dim}.")
+        if not dim_info:
+            st.info("Reviewer score columns not found for Methods/Impact/Innovation/Plan/Team.")
         else:
-            fig_diff = px.bar(
-                temp.sort_values("abs_diff", ascending=False),
-                x="Project_Name",
-                y="abs_diff",
-                hover_data=["Project_ID", c1, c2],
-                title=f"Reviewer disagreement on {dim} (abs diff > 4)",
-            )
-            fig_diff.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_diff, use_container_width=True)
+            dim = st.selectbox("Dimension", list(dim_info.keys()))
+            c1, c2, cdiff = dim_info[dim]
 
-            st.markdown("**Projects with > 4-point difference:**")
-            st.dataframe(
-                temp[["Project_ID", "Project_Name", c1, c2, "abs_diff"]]
-                .sort_values("abs_diff", ascending=False),
-                use_container_width=True,
-            )
+            temp = big_df[["Project_ID", "Project_Name", c1, c2, cdiff]].dropna()
+            temp["abs_diff"] = temp[cdiff].abs()
+            temp = temp[temp["abs_diff"] >= 4]
+
+            if temp.empty:
+                st.info(f"No projects with ≥ 4-point difference in {dim}.")
+            else:
+                fig_diff = px.bar(
+                    temp.sort_values("abs_diff", ascending=False),
+                    x="Project_Name",
+                    y="abs_diff",
+                    hover_data=["Project_ID", c1, c2],
+                    title=f"Reviewer disagreement on {dim} (diff ≥ 4)",
+                )
+                fig_diff.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig_diff, use_container_width=True)
+
+                st.markdown("**Projects with ≥ 4-point difference in this dimension:**")
+                st.dataframe(
+                    temp[["Project_ID", "Project_Name", c1, c2, "abs_diff"]]
+                    .sort_values("abs_diff", ascending=False),
+                    use_container_width=True,
+                )
 
 # ---------- TAB 4: RISK & SENTIMENT ----------
 with tab_risk:
     st.subheader("Risk & sentiment overview")
 
-    # Show table of project, ID, risk and sentiment
     cols = [c for c in [
         "Project_ID", "Project_Name",
         "Risk_Category",
@@ -280,20 +312,18 @@ with tab_risk:
         st.dataframe(filtered_df[cols], use_container_width=True)
     else:
         st.info("No risk/sentiment columns available.")
-    
-    # Plot, if we have numeric sentiment and final score
-    if sentiment_num_col and sentiment_num_col in filtered_df.columns:
-        x_col = "Final_Total" if "Final_Total" in filtered_df.columns else None
-        if x_col:
-            fig_scatter = px.scatter(
-                filtered_df,
-                x=x_col,
-                y=sentiment_num_col,
-                color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
-                hover_data=["Project_ID", "Project_Name"],
-                title=f"{x_col} vs {sentiment_num_col}",
-            )
-            st.plotly_chart(fig_scatter, use_container_width=True)
+
+    # Scatter, if we have numeric sentiment and final score
+    if sentiment_num_col and sentiment_num_col in filtered_df.columns and "Final_Total" in filtered_df.columns:
+        fig_scatter = px.scatter(
+            filtered_df,
+            x="Final_Total",
+            y=sentiment_num_col,
+            color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
+            hover_data=["Project_ID", "Project_Name"],
+            title=f"Final_Total vs {sentiment_num_col}",
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
     st.markdown("### Inspect single project")
     if "Project_Name" in filtered_df.columns:
@@ -328,14 +358,14 @@ with tab_risk:
 with tab_comments:
     st.subheader("🗯️ Comment analysis (word cloud)")
 
-    # Find likely comment / feedback / text columns
+    # Identify comment/feedback/text columns
     comment_columns = []
     for col in df.columns:
         lc = col.lower()
         if any(k in lc for k in ["comment", "feedback", "text"]):
             comment_columns.append(col)
 
-    # Ensure these are included if present
+    # Ensure these key ones are included if present
     for col in ["Combined_Comments", "Combined_Overall_Feedback", "All_Feedback_Text"]:
         if col in df.columns and col not in comment_columns:
             comment_columns.append(col)
@@ -345,6 +375,7 @@ with tab_comments:
     else:
         col_choice = st.selectbox("Select text column", comment_columns)
 
+        # Project selection: "All projects" or specific project (with ID)
         project_options = ["All projects"]
         if "Project_Name" in filtered_df.columns:
             project_options += (
@@ -357,10 +388,13 @@ with tab_comments:
 
         proj_choice = st.selectbox("Select project", project_options)
 
-        # Determine subset
         subset = filtered_df
-        if proj_choice != "All projects" and "Project_Name" in filtered_df.columns and "Project_ID" in filtered_df.columns:
-            # Parse out ID at the end inside parentheses
+        if (
+            proj_choice != "All projects"
+            and "Project_Name" in filtered_df.columns
+            and "Project_ID" in filtered_df.columns
+        ):
+            # Parse the ID from "Title (ID: xxx)"
             try:
                 proj_id_str = proj_choice.split("ID:")[1].rstrip(")")
                 proj_id_str = proj_id_str.strip()
@@ -384,6 +418,6 @@ with tab_comments:
             st.pyplot(fig)
 
             if proj_choice == "All projects":
-                st.caption("Showing text aggregated across all filtered projects.")
+                st.caption("Text aggregated across all filtered projects.")
             else:
-                st.caption(f"Showing text for: {proj_choice}")
+                st.caption(f"Text for: {proj_choice}")
