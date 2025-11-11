@@ -437,14 +437,15 @@ with tab_risk:
                 st.write(row["Risk_Explanation"])
 
 # ---------- TAB 5: PROJECT PROFILES ----------
+# ---------- TAB 5: PROJECT PROFILES ----------
 with tab_profiles:
-    st.subheader("Per-project profiles")
+    st.subheader("Per-project profiles & reviewer comparison")
 
-    # Radar chart
+    # === 5.1 Radar chart of average scores ===
     radar_cols = [c for c in ["Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg"] if c in filtered_df.columns]
     if radar_cols and "Project_Name" in filtered_df.columns:
         project_list = filtered_df["Project_Name"].dropna().unique().tolist()
-        selected_project = st.selectbox("Project for radar chart", project_list, key="radar_project")
+        selected_project = st.selectbox("Select project", project_list, key="radar_project")
 
         proj_rows = filtered_df[filtered_df["Project_Name"] == selected_project]
         row = proj_rows.iloc[0]
@@ -461,13 +462,63 @@ with tab_profiles:
         ))
         fig_radar.update_layout(
             polar=dict(radialaxis=dict(visible=True)),
-            title="Project performance radar"
+            title="Project performance radar (average of reviewers)"
         )
         st.plotly_chart(fig_radar, use_container_width=True)
-    else:
-        st.info("Need average scores for Methods/Impact/Innovation/Plan/Team to draw radar chart.")
 
-    st.markdown("### Reviewer disagreement vs final score")
+        # === 5.2 Reviewer comparison per criterion (bar chart) ===
+        st.markdown("### Reviewer 1 vs Reviewer 2 per criterion")
+
+        # Map dimensions to reviewer columns
+        dim_info = [
+            ("Methods",    "Methods_46_review1",    "Methods_46_review2"),
+            ("Impact",     "Impact_47_review1",     "Impact_47_review2"),
+            ("Innovation", "Innovation_48_review1", "Innovation_48_review2"),
+            ("Plan",       "Plan_49_review1",       "Plan_49_review2"),
+            ("Team",       "Team_50_review1",       "Team_50_review2"),
+            ("Total",      "Total_51_review1",      "Total_51_review2"),
+        ]
+
+        rows = []
+        diff_rows = []
+        for label, c1, c2 in dim_info:
+            if c1 in proj_rows.columns and c2 in proj_rows.columns:
+                s1 = row[c1]
+                s2 = row[c2]
+                # Only include if at least one is not NaN
+                if pd.notna(s1) or pd.notna(s2):
+                    rows.append({"Criterion": label, "Reviewer": "Reviewer 1", "Score": s1})
+                    rows.append({"Criterion": label, "Reviewer": "Reviewer 2", "Score": s2})
+                    diff_rows.append({
+                        "Criterion": label,
+                        "Reviewer 1": s1,
+                        "Reviewer 2": s2,
+                        "Diff (|R1 - R2|)": abs(s1 - s2) if pd.notna(s1) and pd.notna(s2) else None
+                    })
+
+        if rows:
+            comp_df = pd.DataFrame(rows)
+            fig_comp = px.bar(
+                comp_df,
+                x="Criterion",
+                y="Score",
+                color="Reviewer",
+                barmode="group",
+                title="Reviewer 1 vs Reviewer 2 scores for this project",
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
+
+            st.markdown("**Score differences per criterion**")
+            diff_df = pd.DataFrame(diff_rows)
+            st.dataframe(diff_df, use_container_width=True)
+        else:
+            st.info("No reviewer 1/2 score columns found for this project.")
+
+    else:
+        st.info("Need average scores for Methods/Impact/Innovation/Plan/Team to draw project profiles.")
+
+    # === 5.3 Reviewer disagreement vs final score (all projects) ===
+    st.markdown("### Reviewer disagreement vs final score (all projects)")
     if "Max_diff" in filtered_df.columns and "Final_Total" in filtered_df.columns:
         fig_md = px.scatter(
             filtered_df,
@@ -478,6 +529,9 @@ with tab_profiles:
             title="Max reviewer disagreement vs Final Total",
         )
         st.plotly_chart(fig_md, use_container_width=True)
+    else:
+        st.info("Need Max_diff and Final_Total to show disagreement vs score.")
+
 
 # ---------- TAB 6: COMMENT INSIGHTS ----------
 with tab_comments:
