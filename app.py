@@ -85,6 +85,10 @@ df["Multi_Sport"] = first_nonnull(df, ["Multi_Sport_50_review1", "Multi_Sport_50
 # Alias for Final_Total (your code expects this name)
 if "Final Total" in df.columns and "Final_Total" not in df.columns:
     df["Final_Total"] = df["Final Total"]
+# --- Budget column in euros (from review 2) ---
+if "Budget_Total_46_review2" in df.columns:
+    df["Budget_Total_46_review2"] = pd.to_numeric(df["Budget_Total_46_review2"], errors="coerce")
+    df["Budget_EUR"] = df["Budget_Total_46_review2"]  # alias used in overview
 
 # Risk fields – not in this file; leave empty so app shows N/A where needed.
 # If you later add a risk column, map it to "Risk_Category" here.
@@ -222,13 +226,20 @@ tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, t
 )
 
 # ---------- TAB 1: OVERVIEW ----------
+# ---------- TAB 1: OVERVIEW ----------
 with tab_overview:
     st.subheader("Project overview (after filters)")
 
     cols_to_show = [c for c in [
-        "Project_ID", "Project_Name", "Final_Total",
+        "Project_ID",
+        "Project_Name",
+        "Final_Total",
         "Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg",
-        "Risk_Category", "Funding_Band", "Project duration", "alert",
+        "Budget_EUR",              # <--- NEW COLUMN
+        "Risk_Category",
+        "Funding_Band",
+        "Project duration",
+        "alert",
     ] if c in filtered_df.columns]
 
     if "Final_Total" in cols_to_show:
@@ -236,7 +247,12 @@ with tab_overview:
     else:
         view_df = filtered_df[cols_to_show]
 
-    st.dataframe(view_df, use_container_width=True)
+    # Format budget as euros (e.g. €12,345)
+    if "Budget_EUR" in view_df.columns:
+        styled = view_df.style.format({"Budget_EUR": "€{:,.0f}".format})
+        st.dataframe(styled, use_container_width=True)
+    else:
+        st.dataframe(view_df, use_container_width=True)
 
 # ---------- TAB 2: SCORES & FUNDING ----------
 with tab_scores:
