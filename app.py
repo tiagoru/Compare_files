@@ -781,6 +781,7 @@ with tab_decision:
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
+# ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
     st.subheader("🏷️ Buckets & prioritization")
 
@@ -803,56 +804,73 @@ with tab_buckets:
         key="bucket_assignments_upload",
     )
 
-    # Base dataframe for bucket assignments (only current filtered projects)
+    # Base dataframe for current filtered projects
     base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
     base_cols = [c for c in base_cols if c in filtered_df.columns]
     base_df = filtered_df[base_cols].copy()
 
-    # --- Stable state in session_state ---
-    if "bucket_map" not in st.session_state:
-        st.session_state["bucket_map"] = {}
-    if "flag_map" not in st.session_state:
-        st.session_state["flag_map"] = {}
-    if "state_map" not in st.session_state:
-        st.session_state["state_map"] = {}
-
-    bucket_map = st.session_state["bucket_map"]
-    flag_map = st.session_state["flag_map"]
-    state_map = st.session_state["state_map"]
-
-    # ---- If CSV uploaded, override maps from file ----
-    if upload_bucket_file is not None:
-        prev = pd.read_csv(upload_bucket_file)
-        if "Project_ID" in prev.columns and "Bucket" in prev.columns:
+    # ---- Build or align bucket_df in session_state ----
+    if "bucket_df" in st.session_state:
+        prev = st.session_state["bucket_df"]
+        if "Project_ID" in prev.columns:
+            prev = prev[["Project_ID", "Bucket", "Flag", "State"]].copy()
             prev["Project_ID"] = prev["Project_ID"].astype(str)
-            for _, r in prev.iterrows():
-                pid = r["Project_ID"]
-                bucket_map[pid] = r["Bucket"]
-                if "Flag" in prev.columns:
-                    val = r["Flag"]
-                    flag_map[pid] = bool(val) if not pd.isna(val) else False
-                if "State" in prev.columns:
-                    val = r["State"]
-                    state_map[pid] = str(val) if not pd.isna(val) else ""
-            st.success("Loaded previous bucket assignments from CSV.")
+            base_df["Project_ID"] = base_df["Project_ID"].astype(str)
+
+            merged = base_df.merge(
+                prev,
+                on="Project_ID",
+                how="left",
+                suffixes=("", "_prev"),
+            )
+
+            # If no previous bucket, infer; otherwise keep old
+            merged["Bucket"] = merged["Bucket"].where(
+                merged["Bucket"].notna(),
+                merged.apply(infer_bucket, axis=1),
+            )
+
+            # Flags / states default
+            merged["Flag"] = merged["Flag"].fillna(False)
+            merged["State"] = merged["State"].fillna("")
+
+            bucket_df = merged[base_cols + ["Bucket", "Flag", "State"]].copy()
+        else:
+            # Fallback if prev somehow corrupted
+            bucket_df = base_df.copy()
+            bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+            bucket_df["Flag"] = False
+            bucket_df["State"] = ""
+    else:
+        # First time: infer buckets
+        bucket_df = base_df.copy()
+        bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+        bucket_df["Flag"] = False
+        bucket_df["State"] = ""
+
+    # ---- If CSV uploaded, override Bucket/Flag/State where IDs match ----
+    if upload_bucket_file is not None:
+        prev_csv = pd.read_csv(upload_bucket_file)
+        if "Project_ID" in prev_csv.columns and "Bucket" in prev_csv.columns:
+            prev_csv["Project_ID"] = prev_csv["Project_ID"].astype(str)
+            bucket_df["Project_ID"] = bucket_df["Project_ID"].astype(str)
+            bucket_df = bucket_df.merge(
+                prev_csv[["Project_ID", "Bucket", "Flag", "State"]].fillna({"Flag": False, "State": ""}),
+                on="Project_ID",
+                how="left",
+                suffixes=("", "_csv"),
+            )
+
+            # Override bucket/flag/state when CSV values exist
+            bucket_df["Bucket"] = bucket_df["Bucket_csv"].combine_first(bucket_df["Bucket"])
+            bucket_df["Flag"] = bucket_df["Flag_csv"].combine_first(bucket_df["Flag"])
+            bucket_df["State"] = bucket_df["State_csv"].combine_first(bucket_df["State"])
+
+            bucket_df.drop(columns=[c for c in bucket_df.columns if c.endswith("_csv")], inplace=True)
+
+            st.success("Loaded previous bucket assignments from CSV (for matching Project_IDs).")
         else:
             st.warning("CSV must contain at least 'Project_ID' and 'Bucket' columns.")
-
-    # ---- Ensure defaults for all visible projects ----
-    for _, r in base_df.iterrows():
-        pid = r["Project_ID"]
-        if pid not in bucket_map or pd.isna(bucket_map[pid]) or bucket_map[pid] == "":
-            bucket_map[pid] = infer_bucket(r)
-        if pid not in flag_map:
-            flag_map[pid] = False
-        if pid not in state_map:
-            state_map[pid] = ""
-
-    # Build working df with Bucket / Flag / State columns
-    bucket_df = base_df.copy()
-    bucket_df["Bucket"] = bucket_df["Project_ID"].map(bucket_map)
-    bucket_df["Flag"] = bucket_df["Project_ID"].map(flag_map)
-    bucket_df["State"] = bucket_df["Project_ID"].map(state_map)
 
     # ---------- 1) Interactive editor ----------
     edited = st.data_editor(
@@ -880,18 +898,7 @@ with tab_buckets:
         }
     )
 
-    # Update the maps from edited table
-    for _, r in edited[["Project_ID", "Bucket", "Flag", "State"]].dropna(subset=["Project_ID"]).iterrows():
-        pid = r["Project_ID"]
-        bucket_map[pid] = r["Bucket"]
-        flag_map[pid] = bool(r["Flag"])
-        state_val = r["State"]
-        state_map[pid] = "" if pd.isna(state_val) else str(state_val)
-
-    st.session_state["bucket_map"] = bucket_map
-    st.session_state["flag_map"] = flag_map
-    st.session_state["state_map"] = state_map
-
+    # 🔑 From here on, edited is the source of truth
     bucket_df = edited.copy()
     st.session_state["bucket_df"] = bucket_df
 
@@ -956,7 +963,6 @@ with tab_buckets:
         st.dataframe(summary_display, use_container_width=True)
 
         # ---------- 4) Bucket board (projects inside each bucket) ----------
-              # ---------- 4) Bucket board (projects inside each bucket) ----------
         st.markdown("### Bucket board (projects inside each bucket)")
 
         cols_vis = st.columns(5)
@@ -1045,7 +1051,8 @@ with tab_buckets:
                     col.caption(
                         f"Flagged: {int(n_flagged)} projects | Flagged budget: €{b_flagged:,.0f}"
                     )
-
+    else:
+        st.info("No bucket information available yet.")
 
 # ---------- TAB 9: DRAG & DROP BUCKET BOARD ----------
 with tab_dragdrop:
@@ -1061,25 +1068,40 @@ with tab_dragdrop:
         "5 - Rejected / Not recommended",
     ]
 
-    # Ensure we have bucket_map
-    if "bucket_map" not in st.session_state:
-        st.session_state["bucket_map"] = {}
-    bucket_map = st.session_state["bucket_map"]
-
     # Base dataframe for visible projects
     base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
     base_cols = [c for c in base_cols if c in filtered_df.columns]
     base_df = filtered_df[base_cols].copy()
+    base_df["Project_ID"] = base_df["Project_ID"].astype(str)
 
-    # Ensure every visible project has a bucket
-    for _, r in base_df.iterrows():
-        pid = r["Project_ID"]
-        if pid not in bucket_map or pd.isna(bucket_map[pid]) or bucket_map[pid] == "":
-            bucket_map[pid] = infer_bucket(r)
-
-    # Rebuild df with current buckets
-    bucket_df = base_df.copy()
-    bucket_df["Bucket"] = bucket_df["Project_ID"].map(bucket_map)
+    # Start from bucket_df in session if present, else create fresh
+    if "bucket_df" in st.session_state:
+        prev = st.session_state["bucket_df"].copy()
+        if "Project_ID" in prev.columns:
+            prev["Project_ID"] = prev["Project_ID"].astype(str)
+            bucket_df = base_df.merge(
+                prev[["Project_ID", "Bucket", "Flag", "State"]],
+                on="Project_ID",
+                how="left",
+                suffixes=("", "_prev"),
+            )
+            # If no bucket yet for this filtered subset, infer
+            bucket_df["Bucket"] = bucket_df["Bucket"].where(
+                bucket_df["Bucket"].notna(),
+                bucket_df.apply(infer_bucket, axis=1),
+            )
+            bucket_df["Flag"] = bucket_df["Flag"].fillna(False)
+            bucket_df["State"] = bucket_df["State"].fillna("")
+        else:
+            bucket_df = base_df.copy()
+            bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+            bucket_df["Flag"] = False
+            bucket_df["State"] = ""
+    else:
+        bucket_df = base_df.copy()
+        bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+        bucket_df["Flag"] = False
+        bucket_df["State"] = ""
 
     # Build label -> ID map
     label_to_id = {}
@@ -1093,7 +1115,7 @@ with tab_dragdrop:
         label = make_label(row)
         label_to_id[label] = row["Project_ID"]
 
-    # Build items structure: list of dicts for streamlit-sortables
+    # Build containers for streamlit-sortables: list of dicts
     containers = []
     for b in bucket_options:
         subset = bucket_df[bucket_df["Bucket"] == b]
@@ -1105,21 +1127,22 @@ with tab_dragdrop:
             }
         )
 
-    # Drag & drop UI: sort_items expects a LIST of dicts in multi_containers mode
+    # Drag & drop UI
     sorted_containers = sort_items(
         containers,
         multi_containers=True,
         key="dragdrop_buckets",
     )
 
-    # Update bucket_map from drag result
+    # Update bucket_df from drag result
     for container in sorted_containers:
         bucket_label = container["header"]
         for label in container["items"]:
             pid = label_to_id.get(label)
-            if pid:
-                bucket_map[pid] = bucket_label
+            if pid is not None:
+                bucket_df.loc[bucket_df["Project_ID"] == pid, "Bucket"] = bucket_label
 
-    st.session_state["bucket_map"] = bucket_map
+    # Save back to session_state so Buckets tab sees the new assignments
+    st.session_state["bucket_df"] = bucket_df
 
     st.success("Drag-and-drop updates saved. Check the 'Buckets & prioritization' tab for updated summaries.")
