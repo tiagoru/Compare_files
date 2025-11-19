@@ -780,6 +780,7 @@ with tab_decision:
 
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
+# ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
     st.subheader("🏷️ Buckets & prioritization")
 
@@ -892,8 +893,6 @@ with tab_buckets:
     st.session_state["state_map"] = state_map
 
     bucket_df = edited.copy()
-
-    # Save full df in session (useful for future extensions / export)
     st.session_state["bucket_df"] = bucket_df
 
     # ---------- 2) Download current assignments ----------
@@ -907,7 +906,7 @@ with tab_buckets:
         mime="text/csv",
     )
 
-    # ---------- 3) Summary per bucket ----------
+    # ---------- 3) Summary per bucket (with states + flags) ----------
     if "Bucket" in bucket_df.columns:
         summary = (
             bucket_df
@@ -916,11 +915,15 @@ with tab_buckets:
                 n_projects=("Project_ID", "nunique"),
                 total_budget=("Budget_EUR", "sum"),
                 avg_score=("Final_Total", "mean"),
+                n_approved=("State", lambda s: (s == "Approved").sum()),
+                n_revision=("State", lambda s: (s == "Revision").sum()),
+                n_third=("State", lambda s: (s == "3rd review needed").sum()),
+                n_flagged=("Flag", lambda x: (x == True).sum()),
             )
             .reset_index()
         )
 
-        st.markdown("### Bucket summary (counts, sum of budget, average score)")
+        st.markdown("### Bucket summary (totals, states, flagged)")
 
         summary_display = summary.copy()
         summary_display["total_budget"] = summary_display["total_budget"].fillna(0)
@@ -928,11 +931,31 @@ with tab_buckets:
         summary_display["total_budget_eur"] = summary_display["total_budget"].apply(
             lambda x: f"€{x:,.0f}"
         )
-        summary_display = summary_display[["Bucket", "n_projects", "total_budget_eur", "avg_score"]]
+
+        summary_display = summary_display[
+            [
+                "Bucket",
+                "n_projects",
+                "total_budget_eur",
+                "avg_score",
+                "n_approved",
+                "n_revision",
+                "n_third",
+                "n_flagged",
+            ]
+        ].rename(
+            columns={
+                "n_projects": "Total projects",
+                "n_approved": "Approved",
+                "n_revision": "Revision",
+                "n_third": "3rd review needed",
+                "n_flagged": "Flagged",
+            }
+        )
+
         st.dataframe(summary_display, use_container_width=True)
 
-        # ---------- 4) Bucket board (with Project_ID, Flag, State) ----------
-                # ---------- 4) Bucket board (projects inside each bucket) ----------
+        # ---------- 4) Bucket board (projects inside each bucket) ----------
         st.markdown("### Bucket board (projects inside each bucket)")
 
         cols_vis = st.columns(5)
@@ -991,9 +1014,20 @@ with tab_buckets:
 
                     col.dataframe(display_df, use_container_width=True)
 
+                    # Per-bucket totals for this column
                     total_b = subset["Budget_EUR"].sum() if "Budget_EUR" in subset.columns else 0
-                    col.caption(f"Sum of budget in this bucket: €{total_b:,.0f}")
+                    n_total = len(subset)
+                    n_approved = (subset["State"] == "Approved").sum()
+                    n_revision = (subset["State"] == "Revision").sum()
+                    n_third = (subset["State"] == "3rd review needed").sum()
+                    n_flagged = subset["Flag"].sum() if "Flag" in subset.columns else 0
 
+                    col.caption(f"Total budget: €{total_b:,.0f}")
+                    col.caption(
+                        f"Projects: {n_total} | ✅ {n_approved}  🟠 {n_revision}  🔍 {n_third} | Flagged: {int(n_flagged)}"
+                    )
+    else:
+        st.info("No bucket information available yet.")
 
 # ---------- TAB 9: DRAG & DROP BUCKET BOARD ----------
 with tab_dragdrop:
