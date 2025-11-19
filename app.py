@@ -970,36 +970,34 @@ with tab_buckets:
             None: "",
         }
 
-                            # Per-bucket totals for this column
-                    if "Budget_EUR" in subset.columns:
-                        total_b = subset["Budget_EUR"].sum()
-                        b_approved = subset.loc[subset["State"] == "Approved", "Budget_EUR"].sum()
-                        b_revision = subset.loc[subset["State"] == "Revision", "Budget_EUR"].sum()
-                        b_third = subset.loc[subset["State"] == "3rd review needed", "Budget_EUR"].sum()
-                        b_flagged = subset.loc[subset["Flag"] == True, "Budget_EUR"].sum()
-                    else:
-                        total_b = b_approved = b_revision = b_third = b_flagged = 0
+       # Per-bucket totals for this column
+       if "Budget_EUR" in subset.columns:
+           total_b = subset["Budget_EUR"].sum()
+           b_approved = subset.loc[subset["State"] == "Approved", "Budget_EUR"].sum()
+           b_revision = subset.loc[subset["State"] == "Revision", "Budget_EUR"].sum()
+           b_third = subset.loc[subset["State"] == "3rd review needed", "Budget_EUR"].sum()
+           b_flagged = subset.loc[subset["Flag"] == True, "Budget_EUR"].sum()
+       else:
+           total_b = b_approved = b_revision = b_third = b_flagged = 0
+       n_total = len(subset)
+       n_approved = (subset["State"] == "Approved").sum()
+       n_revision = (subset["State"] == "Revision").sum()
+       n_third = (subset["State"] == "3rd review needed").sum()
+       n_flagged = subset["Flag"].sum() if "Flag" in subset.columns else 0
 
-                    n_total = len(subset)
-                    n_approved = (subset["State"] == "Approved").sum()
-                    n_revision = (subset["State"] == "Revision").sum()
-                    n_third = (subset["State"] == "3rd review needed").sum()
-                    n_flagged = subset["Flag"].sum() if "Flag" in subset.columns else 0
+       # 1) Total budget & project counts
+       col.caption(
+          f"Total budget (all): €{total_b:,.0f} | Projects: {n_total}"
+        )
+       # 2) Budget per state
+       col.caption(
+          f"Budget by state → ✅ €{b_approved:,.0f} | 🟠 €{b_revision:,.0f} | 🔍 €{b_third:,.0f}"
+        )
 
-                    # 1) Total budget & project counts
-                    col.caption(
-                        f"Total budget (all): €{total_b:,.0f} | Projects: {n_total}"
-                    )
-
-                    # 2) Budget per state
-                    col.caption(
-                        f"Budget by state → ✅ €{b_approved:,.0f} | 🟠 €{b_revision:,.0f} | 🔍 €{b_third:,.0f}"
-                    )
-
-                    # 3) Flagged projects & their budget
-                    col.caption(
-                        f"Flagged: {int(n_flagged)} projects | Flagged budget: €{b_flagged:,.0f}"
-                    )
+       # 3) Flagged projects & their budget
+       col.caption(
+          f"Flagged: {int(n_flagged)} projects | Flagged budget: €{b_flagged:,.0f}"
+          )
 
     else:
         st.info("No bucket information available yet.")
