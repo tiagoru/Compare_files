@@ -185,6 +185,29 @@ if big_diff_cols:
 else:
     filtered_df["Any_big_diff"] = False
     filtered_df["Max_diff"] = 0
+    
+# ===================== BUCKET HELPER =====================
+
+def infer_bucket(row) -> str:
+    """
+    Default bucket assignment based on Multi_Sport & Category text.
+    You can tweak this logic as needed.
+    """
+    multi = str(row.get("Multi_Sport", "")).strip().lower()
+    cat = str(row.get("Category", "")).strip().lower()
+
+    is_multi = multi in ["yes", "y", "true", "1", "multi", "multi-sport"]
+    is_paralympic = "paralympic" in cat
+    is_para = "para" in cat  # catches para-sport / para sport etc.
+
+    if is_paralympic and is_multi:
+        return "1 - Priority multi-sport Paralympic"
+    elif is_paralympic:
+        return "2 - Priority one-sport Paralympic"
+    elif is_para:
+        return "3 - Other para sports"
+    else:
+        return "4 - Others"
 
 # ===================== TOP METRICS =====================
 
@@ -215,7 +238,7 @@ st.markdown("---")
 
 # ===================== TABS =====================
 
-tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision = st.tabs(
+tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets = st.tabs(
     [
         "📁 Overview",
         "📈 Scores & funding",
@@ -224,6 +247,7 @@ tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, t
         "🧬 Project profiles",
         "🗯️ Comment insights",
         "🧠 Decision support",
+        "🏷️ Buckets & prioritization",
     ]
 )
 
@@ -737,3 +761,135 @@ with tab_decision:
         "Decision_Score = Final_Total (70%) + Innovation_avg (20%) + Impact_avg (10%) "
         "– penalty for Medium/High risk. Adjust the formula in the code if you want different weights."
     )
+# ---------- NEW TAB: BUCKETS & PRIORITIZATION ----------
+with tab_buckets:
+    st.subheader("🏷️ Buckets & prioritization")
+
+    st.markdown(
+        """
+**Buckets:**
+
+1. **Priority multi-sport Paralympic**  
+2. **Priority one-sport Paralympic**  
+3. **Other para sports**  
+4. **Others**
+
+You can change the bucket assignment directly in the table below.
+        """
+    )
+
+    # Base dataframe for bucket assignments (only current filtered projects)
+    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category"]
+    base_cols = [c for c in base_cols if c in filtered_df.columns]
+    base_df = filtered_df[base_cols].copy()
+
+    # Initialise or update session_state bucket dataframe
+    if "bucket_df" not in st.session_state:
+        # First time: assign default buckets via rules
+        bucket_df = base_df.copy()
+        bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+    else:
+        # Keep previous assignments where possible
+        prev = st.session_state["bucket_df"]
+
+        # Merge on Project_ID to bring back previous Bucket values
+        if "Project_ID" in base_df.columns and "Project_ID" in prev.columns:
+            bucket_df = base_df.merge(
+                prev[["Project_ID", "Bucket"]],
+                on="Project_ID",
+                how="left",
+                suffixes=("", "_prev"),
+            )
+            # If new rows (no previous bucket), infer default bucket
+            mask = bucket_df["Bucket"].isna()
+            bucket_df.loc[mask, "Bucket"] = bucket_df[mask].apply(infer_bucket, axis=1)
+        else:
+            bucket_df = base_df.copy()
+            bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+
+    st.session_state["bucket_df"] = bucket_df
+
+    # Define allowed bucket labels
+    bucket_options = [
+        "1 - Priority multi-sport Paralympic",
+        "2 - Priority one-sport Paralympic",
+        "3 - Other para sports",
+        "4 - Others",
+    ]
+
+    # Interactive editor
+    edited = st.data_editor(
+        st.session_state["bucket_df"],
+        key="bucket_editor",
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Bucket": st.column_config.SelectboxColumn(
+                "Bucket",
+                options=bucket_options,
+                required=True,
+            ),
+            "Budget_EUR": st.column_config.NumberColumn(
+                "Budget (EUR)",
+                format="€%d",
+            ),
+            "Final_Total": st.column_config.NumberColumn(
+                "Final Total",
+                format="%.1f",
+            ),
+        }
+    )
+
+    # Save edits back to session_state
+    st.session_state["bucket_df"] = edited
+    bucket_df = edited.copy()
+
+    # ---- Summary per bucket ----
+    if "Bucket" in bucket_df.columns:
+        summary = (
+            bucket_df
+            .groupby("Bucket", dropna=False)
+            .agg(
+                n_projects=("Project_ID", "nunique"),
+                total_budget=("Budget_EUR", "sum"),
+                avg_score=("Final_Total", "mean"),
+            )
+            .reset_index()
+        )
+
+        # Show high-level summary
+        st.markdown("### Bucket summary (counts, sum of budget, average score)")
+        # Format budget nicely
+        summary_display = summary.copy()
+        summary_display["total_budget"] = summary_display["total_budget"].fillna(0)
+        summary_display["avg_score"] = summary_display["avg_score"].round(1)
+        summary_display["total_budget_eur"] = summary_display["total_budget"].apply(
+            lambda x: f"€{x:,.0f}"
+        )
+        summary_display = summary_display[["Bucket", "n_projects", "total_budget_eur", "avg_score"]]
+        st.dataframe(summary_display, use_container_width=True)
+
+        # Small visualizations
+        st.markdown("### Visualisation")
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            fig_count = px.bar(
+                summary,
+                x="Bucket",
+                y="n_projects",
+                title="Number of projects per bucket",
+            )
+            st.plotly_chart(fig_count, use_container_width=True)
+
+        with col_b:
+            fig_budget = px.bar(
+                summary,
+                x="Bucket",
+                y="total_budget",
+                title="Total budget per bucket (EUR)",
+            )
+            fig_budget.update_layout(yaxis_tickprefix="€")
+            st.plotly_chart(fig_budget, use_container_width=True)
+    else:
+        st.info("No bucket information available yet.")
