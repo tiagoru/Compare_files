@@ -764,20 +764,94 @@ with tab_decision:
 
 # ---------- NEW TAB: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
-    st.subheader("🏷️ Buckets & prioritization")
+        st.subheader("🏷️ Buckets & prioritization")
 
-    st.markdown(
-        """
-**Buckets:**
+    bucket_options = [
+        "1 - Priority multi-sport Paralympic",
+        "2 - Priority one-sport Paralympic",
+        "3 - Other para sports",
+        "4 - Others",
+        "5 - Rejected / Not recommended",
+    ]
 
-1. **Priority multi-sport Paralympic**  
-2. **Priority one-sport Paralympic**  
-3. **Other para sports**  
-4. **Others**
+    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
+    base_cols = [c for c in base_cols if c in filtered_df.columns]
+    base_df = filtered_df[base_cols].copy()
 
-You can change the bucket assignment directly in the table below.
-        """
+    if "bucket_map" not in st.session_state:
+        st.session_state["bucket_map"] = {}
+
+    bucket_map = st.session_state["bucket_map"]
+
+    for _, r in base_df.iterrows():
+        pid = r["Project_ID"]
+        if pid not in bucket_map:
+            bucket_map[pid] = infer_bucket(r)
+
+    bucket_df = base_df.copy()
+    bucket_df["Bucket"] = bucket_df["Project_ID"].map(bucket_map)
+
+    edited = st.data_editor(
+        bucket_df,
+        key="bucket_editor",
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Bucket": st.column_config.SelectboxColumn(
+                "Bucket",
+                options=bucket_options,
+                required=True,
+            ),
+            "Budget_EUR": st.column_config.NumberColumn("Budget (EUR)", format="€%d"),
+            "Final_Total": st.column_config.NumberColumn("Final Total", format="%.1f"),
+        }
     )
+
+    for _, r in edited[["Project_ID", "Bucket"]].iterrows():
+        bucket_map[r["Project_ID"]] = r["Bucket"]
+
+    st.session_state["bucket_map"] = bucket_map
+    bucket_df = edited.copy()
+
+    st.markdown("### Bucket summary")
+
+    summary = (
+        bucket_df.groupby("Bucket", dropna=False)
+        .agg(
+            n_projects=("Project_ID", "nunique"),
+            total_budget=("Budget_EUR", "sum"),
+            avg_score=("Final_Total", "mean"),
+        )
+        .reset_index()
+    )
+    summary["total_budget"] = summary["total_budget"].fillna(0)
+    summary["avg_score"] = summary["avg_score"].round(1)
+    summary["total_budget_eur"] = summary["total_budget"].apply(lambda x: f"€{x:,.0f}")
+
+    st.dataframe(summary[["Bucket", "n_projects", "total_budget_eur", "avg_score"]], use_container_width=True)
+
+    st.markdown("### Bucket board")
+
+    cols_vis = st.columns(5)
+    bucket_order = bucket_options
+
+    for bucket_label, col in zip(bucket_order, cols_vis):
+        with col:
+            col.markdown(f"**{bucket_label}**")
+            subset = bucket_df[bucket_df["Bucket"] == bucket_label]
+
+            if subset.empty:
+                col.caption("No projects.")
+            else:
+                df_disp = subset.copy()
+                df_disp["Budget"] = df_disp["Budget_EUR"].apply(lambda x: f"€{x:,.0f}")
+                df_disp["Score"] = df_disp["Final_Total"].apply(lambda x: f"{x:.1f}")
+                df_disp = df_disp[["Project_Name", "Group", "Budget", "Score"]]
+
+                col.dataframe(df_disp, use_container_width=True)
+
+                total_b = subset["Budget_EUR"].sum()
+                col.caption(f"Total budget: €{total_b:,.0f}")
 
     # Base dataframe for bucket assignments (only current filtered projects)
     base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category"]
