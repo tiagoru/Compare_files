@@ -248,7 +248,7 @@ st.markdown("---")
 
 # ===================== TABS =====================
 
-tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets = st.tabs(
+tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets, tab_dragdrop = st.tabs(
     [
         "📁 Overview",
         "📈 Scores & funding",
@@ -258,8 +258,10 @@ tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, t
         "🗯️ Comment insights",
         "🧠 Decision support",
         "🏷️ Buckets & prioritization",
+        "🖱️ Drag & drop buckets",
     ]
 )
+
 
 # ---------- TAB 1: OVERVIEW ----------
 with tab_overview:
@@ -904,3 +906,80 @@ with tab_buckets:
                     col.caption(f"Sum of budget in this bucket: €{total_b:,.0f}")
     else:
         st.info("No bucket information available yet.")
+
+# ---------- TAB 9: DRAG & DROP BUCKET BOARD ----------
+with tab_dragdrop:
+    from streamlit_sortables import sort_items
+
+    st.subheader("🖱️ Drag & drop bucket assignment")
+
+    # Same bucket labels as in the Buckets tab
+    bucket_options = [
+        "1 - Priority multi-sport Paralympic",
+        "2 - Priority one-sport Paralympic",
+        "3 - Other para sports",
+        "4 - Others",
+        "5 - Rejected / Not recommended",
+    ]
+
+    # Make sure we have a bucket_map (same logic as in Buckets tab)
+    if "bucket_map" not in st.session_state:
+        st.session_state["bucket_map"] = {}
+
+    bucket_map = st.session_state["bucket_map"]
+
+    # Base dataframe for visible projects
+    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
+    base_cols = [c for c in base_cols if c in filtered_df.columns]
+    base_df = filtered_df[base_cols].copy()
+
+    # Ensure every visible project has a bucket (keep previous, infer for new ones)
+    for _, r in base_df.iterrows():
+        pid = r["Project_ID"]
+        if pid not in bucket_map or pd.isna(bucket_map[pid]) or bucket_map[pid] == "":
+            bucket_map[pid] = infer_bucket(r)
+
+    # Build working df with Bucket column
+    bucket_df = base_df.copy()
+    bucket_df["Bucket"] = bucket_df["Project_ID"].map(bucket_map)
+
+    # ---------- Build lists for drag & drop ----------
+    bucket_lists = {}
+    for b in bucket_options:
+        subset = bucket_df[bucket_df["Bucket"] == b]
+        labels = []
+        for _, row in subset.iterrows():
+            name = str(row["Project_Name"])
+            budget = row["Budget_EUR"] if not pd.isna(row["Budget_EUR"]) else 0
+            score = row["Final_Total"] if not pd.isna(row["Final_Total"]) else 0
+            label = f"{name} | €{budget:,.0f} | {score:.1f} pts"
+            labels.append(label)
+        bucket_lists[b] = labels
+
+    # Drag & drop UI
+    new_bucket_lists = sort_items(
+        bucket_lists,
+        multi_containers=True,
+        key="dragdrop_buckets",
+    )
+
+    # Reverse lookup: label -> Project_ID
+    label_to_id = {}
+    for _, row in bucket_df.iterrows():
+        name = str(row["Project_Name"])
+        budget = row["Budget_EUR"] if not pd.isna(row["Budget_EUR"]) else 0
+        score = row["Final_Total"] if not pd.isna(row["Final_Total"]) else 0
+        label = f"{name} | €{budget:,.0f} | {score:.1f} pts"
+        label_to_id[label] = row["Project_ID"]
+
+    # Update bucket_map from drag & drop result
+    for bucket_label, labels in new_bucket_lists.items():
+        for label in labels:
+            pid = label_to_id.get(label)
+            if pid:
+                bucket_map[pid] = bucket_label
+
+    st.session_state["bucket_map"] = bucket_map
+
+    st.success("Drag-and-drop updates saved. Check the 'Buckets & prioritization' tab for updated summaries.")
+
