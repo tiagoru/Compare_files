@@ -810,13 +810,14 @@ You can change the bucket assignment directly in the table below.
 
     st.session_state["bucket_df"] = bucket_df
 
-    # Define allowed bucket labels
-    bucket_options = [
-        "1 - Priority multi-sport Paralympic",
-        "2 - Priority one-sport Paralympic",
-        "3 - Other para sports",
-        "4 - Others",
-    ]
+bucket_options = [
+    "1 - Priority multi-sport Paralympic",
+    "2 - Priority one-sport Paralympic",
+    "3 - Other para sports",
+    "4 - Others",
+    "5 - Rejected / Not recommended",
+]
+
 
     # ---------- 1) Interactive editor ----------
     edited = st.data_editor(
