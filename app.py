@@ -89,6 +89,14 @@ df["Project duration"] = first_nonnull(
 df["Category"] = first_nonnull(df, ["Category_51_review1", "Category_51_review2"])
 df["Multi_Sport"] = first_nonnull(df, ["Multi_Sport_50_review1", "Multi_Sport_50_review2"])
 
+# Group from Category_51_review1 (or fallback)
+if "Category_51_review1" in df.columns:
+    df["Group"] = df["Category_51_review1"]
+elif "Category_51_review2" in df.columns:
+    df["Group"] = df["Category_51_review2"]
+else:
+    df["Group"] = df["Category"]
+
 # Alias for Final_Total (your code expects this name)
 if "Final Total" in df.columns and "Final_Total" not in df.columns:
     df["Final_Total"] = df["Final Total"]
@@ -185,20 +193,22 @@ if big_diff_cols:
 else:
     filtered_df["Any_big_diff"] = False
     filtered_df["Max_diff"] = 0
-    
+
 # ===================== BUCKET HELPER =====================
 
 def infer_bucket(row) -> str:
     """
-    Default bucket assignment based on Multi_Sport & Category text.
-    You can tweak this logic as needed.
+    Default bucket assignment based on Multi_Sport & Group/Category text.
     """
     multi = str(row.get("Multi_Sport", "")).strip().lower()
+    group = str(row.get("Group", "")).strip().lower()
     cat = str(row.get("Category", "")).strip().lower()
 
     is_multi = multi in ["yes", "y", "true", "1", "multi", "multi-sport"]
-    is_paralympic = "paralympic" in cat
-    is_para = "para" in cat  # catches para-sport / para sport etc.
+    text = f"{group} {cat}"
+
+    is_paralympic = "paralympic" in text
+    is_para = "para" in text  # catches para-sport / para sport etc.
 
     if is_paralympic and is_multi:
         return "1 - Priority multi-sport Paralympic"
@@ -207,7 +217,7 @@ def infer_bucket(row) -> str:
     elif is_para:
         return "3 - Other para sports"
     else:
-        return "4 - Others"
+        return "4 - Others"  # manual move to bucket 5 if rejected
 
 # ===================== TOP METRICS =====================
 
@@ -727,8 +737,8 @@ with tab_decision:
     if "Risk_Category" in filtered_df.columns:
         rc = filtered_df["Risk_Category"].fillna("").str.lower()
         risk_penalty = (
-            (rc.str_contains("high").astype(int) * 10)
-            + (rc.str_contains("medium").astype(int) * 5)
+            (rc.str.contains("high").astype(int) * 10) +
+            (rc.str.contains("medium").astype(int) * 5)
         )
     else:
         risk_penalty = pd.Series(0, index=filtered_df.index)
@@ -762,7 +772,7 @@ with tab_decision:
         "– penalty for Medium/High risk. Adjust the formula in the code if you want different weights."
     )
 
-# ---------- NEW TAB: BUCKETS & PRIORITIZATION ----------
+# ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
     st.subheader("🏷️ Buckets & prioritization")
 
@@ -774,23 +784,28 @@ with tab_buckets:
         "5 - Rejected / Not recommended",
     ]
 
+    # Base dataframe for bucket assignments (only current filtered projects)
     base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
     base_cols = [c for c in base_cols if c in filtered_df.columns]
     base_df = filtered_df[base_cols].copy()
 
+    # --- Stable bucket state in session_state ---
     if "bucket_map" not in st.session_state:
         st.session_state["bucket_map"] = {}
 
     bucket_map = st.session_state["bucket_map"]
 
+    # Ensure every visible project has a bucket (keep previous, infer only for new)
     for _, r in base_df.iterrows():
         pid = r["Project_ID"]
-        if pid not in bucket_map:
+        if pid not in bucket_map or pd.isna(bucket_map[pid]) or bucket_map[pid] == "":
             bucket_map[pid] = infer_bucket(r)
 
+    # Build working df with Bucket column from the map
     bucket_df = base_df.copy()
     bucket_df["Bucket"] = bucket_df["Project_ID"].map(bucket_map)
 
+    # ---------- 1) Interactive editor ----------
     edited = st.data_editor(
         bucket_df,
         key="bucket_editor",
@@ -807,117 +822,11 @@ with tab_buckets:
         }
     )
 
-    for _, r in edited[["Project_ID", "Bucket"]].iterrows():
+    # Update the bucket_map from edited table
+    for _, r in edited[["Project_ID", "Bucket"]].dropna(subset=["Project_ID"]).iterrows():
         bucket_map[r["Project_ID"]] = r["Bucket"]
 
     st.session_state["bucket_map"] = bucket_map
-    bucket_df = edited.copy()
-
-    st.markdown("### Bucket summary")
-
-    summary = (
-        bucket_df.groupby("Bucket", dropna=False)
-        .agg(
-            n_projects=("Project_ID", "nunique"),
-            total_budget=("Budget_EUR", "sum"),
-            avg_score=("Final_Total", "mean"),
-        )
-        .reset_index()
-    )
-    summary["total_budget"] = summary["total_budget"].fillna(0)
-    summary["avg_score"] = summary["avg_score"].round(1)
-    summary["total_budget_eur"] = summary["total_budget"].apply(lambda x: f"€{x:,.0f}")
-
-    st.dataframe(summary[["Bucket", "n_projects", "total_budget_eur", "avg_score"]], use_container_width=True)
-
-    st.markdown("### Bucket board")
-
-    cols_vis = st.columns(5)
-    bucket_order = bucket_options
-
-    for bucket_label, col in zip(bucket_order, cols_vis):
-        with col:
-            col.markdown(f"**{bucket_label}**")
-            subset = bucket_df[bucket_df["Bucket"] == bucket_label]
-
-            if subset.empty:
-                col.caption("No projects.")
-            else:
-                df_disp = subset.copy()
-                df_disp["Budget"] = df_disp["Budget_EUR"].apply(lambda x: f"€{x:,.0f}")
-                df_disp["Score"] = df_disp["Final_Total"].apply(lambda x: f"{x:.1f}")
-                df_disp = df_disp[["Project_Name", "Group", "Budget", "Score"]]
-
-                col.dataframe(df_disp, use_container_width=True)
-
-                total_b = subset["Budget_EUR"].sum()
-                col.caption(f"Total budget: €{total_b:,.0f}")
-
-    # Base dataframe for bucket assignments (only current filtered projects)
-    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category"]
-    base_cols = [c for c in base_cols if c in filtered_df.columns]
-    base_df = filtered_df[base_cols].copy()
-
-    # Initialise or update session_state bucket dataframe
-    if "bucket_df" not in st.session_state:
-        # First time: assign default buckets via rules
-        bucket_df = base_df.copy()
-        bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
-    else:
-        # Keep previous assignments where possible
-        prev = st.session_state["bucket_df"]
-
-        # Merge on Project_ID to bring back previous Bucket values
-        if "Project_ID" in base_df.columns and "Project_ID" in prev.columns:
-            bucket_df = base_df.merge(
-                prev[["Project_ID", "Bucket"]],
-                on="Project_ID",
-                how="left",
-                suffixes=("", "_prev"),
-            )
-            # If new rows (no previous bucket), infer default bucket
-            mask = bucket_df["Bucket"].isna()
-            bucket_df.loc[mask, "Bucket"] = bucket_df[mask].apply(infer_bucket, axis=1)
-        else:
-            bucket_df = base_df.copy()
-            bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
-
-    st.session_state["bucket_df"] = bucket_df
-
-bucket_options = [
-    "1 - Priority multi-sport Paralympic",
-    "2 - Priority one-sport Paralympic",
-    "3 - Other para sports",
-    "4 - Others",
-    "5 - Rejected / Not recommended",
-]
-
-
-    # ---------- 1) Interactive editor ----------
-    edited = st.data_editor(
-        st.session_state["bucket_df"],
-        key="bucket_editor",
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "Bucket": st.column_config.SelectboxColumn(
-                "Bucket",
-                options=bucket_options,
-                required=True,
-            ),
-            "Budget_EUR": st.column_config.NumberColumn(
-                "Budget (EUR)",
-                format="€%d",
-            ),
-            "Final_Total": st.column_config.NumberColumn(
-                "Final Total",
-                format="%.1f",
-            ),
-        }
-    )
-
-    # Save edits back to session_state
-    st.session_state["bucket_df"] = edited
     bucket_df = edited.copy()
 
     # ---------- 2) Summary per bucket ----------
@@ -944,11 +853,11 @@ bucket_options = [
         summary_display = summary_display[["Bucket", "n_projects", "total_budget_eur", "avg_score"]]
         st.dataframe(summary_display, use_container_width=True)
 
-        # ---------- 3) "Board" visualization: 4 buckets with projects inside ----------
+        # ---------- 3) Board visualization: 5 buckets with projects inside ----------
         st.markdown("### Bucket board (projects inside each bucket)")
 
-        cols_vis = st.columns(4)
-        bucket_order = bucket_options  # fixed order 1–4
+        cols_vis = st.columns(5)
+        bucket_order = bucket_options  # fixed order 1–5
 
         for bucket_label, col in zip(bucket_order, cols_vis):
             with col:
@@ -958,7 +867,6 @@ bucket_options = [
                 if subset.empty:
                     col.caption("No projects assigned.")
                 else:
-                    # Build a compact view: Name, Budget, Total points
                     display_df = subset.copy()
 
                     if "Budget_EUR" in display_df.columns:
@@ -975,12 +883,16 @@ bucket_options = [
                     else:
                         display_df["Final_Total_fmt"] = "—"
 
-                    display_df = display_df[["Project_Name", "Budget_EUR_fmt", "Final_Total_fmt"]]
+                    cols_show = ["Project_Name", "Group", "Budget_EUR_fmt", "Final_Total_fmt"]
+                    cols_show = [c for c in cols_show if c in display_df.columns]
+
+                    display_df = display_df[cols_show]
 
                     col.dataframe(
                         display_df.rename(
                             columns={
                                 "Project_Name": "Project",
+                                "Group": "Group",
                                 "Budget_EUR_fmt": "Budget",
                                 "Final_Total_fmt": "Total points",
                             }
@@ -988,9 +900,7 @@ bucket_options = [
                         use_container_width=True,
                     )
 
-                    # Sum of budget under the table
                     total_b = subset["Budget_EUR"].sum() if "Budget_EUR" in subset.columns else 0
                     col.caption(f"Sum of budget in this bucket: €{total_b:,.0f}")
-
     else:
         st.info("No bucket information available yet.")
