@@ -1,6 +1,8 @@
 streamlit
 pandas
+numpy
 plotly
-openpyxl
-wordcloud
 matplotlib
+wordcloud
+streamlit-sortables
+openpyxl        # to read xlsx files
