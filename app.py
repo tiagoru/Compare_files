@@ -35,57 +35,81 @@ if uploaded_file is None:
 df = pd.read_excel(uploaded_file)
 
 # ===================== COLUMN ALIASES / CLEANUP =====================
+# ===================== COLUMN ALIASES / CLEANUP (NEW FILE) =====================
+import numpy as np
+
+def first_nonnull(df, candidates):
+    """Return a Series that is the first non-null across the listed columns (left to right)."""
+    cols = [c for c in candidates if c in df.columns]
+    if not cols:
+        return pd.Series([np.nan] * len(df), index=df.index)
+    return df[cols].bfill(axis=1).iloc[:, 0]
 
 # Project title
-if "Research project title:" in df.columns:
-    df["Project_Name"] = df["Research project title:"].astype(str)
-elif "Project title2" in df.columns:
-    df["Project_Name"] = df["Project title2"].astype(str)
-else:
-    df["Project_Name"] = df.iloc[:, 0].astype(str)
+df["Project_Name"] = first_nonnull(
+    df,
+    [
+        "Project_title2_ref",
+        "Project_title_4_review1",
+        "Project_title_4_review2",
+    ],
+).astype(str)
 
 # Project ID
-if "ID" in df.columns:
-    df["Project_ID"] = df["ID"]
+df["Project_ID"] = first_nonnull(
+    df,
+    ["ID3_Key", "ID_0_review1", "ID_0_review2"],
+).astype(str)
 
-# Funding band
-if "Please specify which of the funding bands is requested for the project?" in df.columns:
-    df["Funding_Band"] = df["Please specify which of the funding bands is requested for the project?"]
+# Funding band (coalesce r1/r2)
+df["Funding_Band"] = first_nonnull(
+    df,
+    ["Band_47_review1", "Band_47_review2"],
+)
 
-# Final total
-if "Final Total" in df.columns:
-    df["Final_Total"] = df["Final Total"]
+# Budget total (optional, if you want to show/filter later)
+df["Budget_Total"] = first_nonnull(
+    df,
+    ["Budget_Total_46_review1", "Budget_Total_46_review2"],
+)
 
-# Risk + explanation (old/new names)
-if "Risk_Category" not in df.columns and "Risk" in df.columns:
-    df["Risk_Category"] = df["Risk"]
-if "Risk_Explanation" not in df.columns and "Explanation" in df.columns:
-    df["Risk_Explanation"] = df["Explanation"]
+# Duration -> keep the name your overview tab expects ("Project duration")
+df["Project duration"] = first_nonnull(
+    df,
+    ["Duration_49_review1", "Duration_49_review2"],
+)
 
-# Sentiment columns
+# Category / Multi-sport (optional display fields)
+df["Category"] = first_nonnull(df, ["Category_51_review1", "Category_51_review2"])
+df["Multi_Sport"] = first_nonnull(df, ["Multi_Sport_50_review1", "Multi_Sport_50_review2"])
+
+# Risk fields – your new file doesn’t include explicit risk categories;
+# keep these undefined so the app gracefully shows "N/A" in places.
+# If you later add a Risk column, map it here to "Risk_Category".
+
+# Sentiment fields – not present in the new file; leave as None so the app hides those charts.
 sentiment_num_col = None
-if "Sentiment_Polarity" in df.columns:
-    sentiment_num_col = "Sentiment_Polarity"
-elif "Sentiment_Score" in df.columns:
-    sentiment_num_col = "Sentiment_Score"
-
-sentiment_label_col = "Sentiment_Label" if "Sentiment_Label" in df.columns else None
+sentiment_label_col = None
 
 # ===================== DERIVED SCORE COLUMNS (AVERAGE OF REVIEWERS) =====================
+# Update to the new reviewer column numbers (53–58)
 
-# (label, reviewer1_column, reviewer2_column)
 score_pairs = [
-    ("Methods",    "Methods_46_review1",    "Methods_46_review2"),
-    ("Impact",     "Impact_47_review1",     "Impact_47_review2"),
-    ("Innovation", "Innovation_48_review1", "Innovation_48_review2"),
-    ("Plan",       "Plan_49_review1",       "Plan_49_review2"),
-    ("Team",       "Team_50_review1",       "Team_50_review2"),
-    ("Total",      "Total_51_review1",      "Total_51_review2"),
+    ("Methods",    "Methods_53_review1",    "Methods_53_review2"),
+    ("Impact",     "Impact_54_review1",     "Impact_54_review2"),
+    ("Innovation", "Innovation_55_review1", "Innovation_55_review2"),
+    ("Plan",       "Plan_56_review1",       "Plan_56_review2"),
+    ("Team",       "Team_57_review1",       "Team_57_review2"),
+    ("Total",      "Total_58_review1",      "Total_58_review2"),
 ]
 
 for label, c1, c2 in score_pairs:
     if c1 in df.columns and c2 in df.columns:
         df[f"{label}_avg"] = df[[c1, c2]].mean(axis=1)
+
+# Keep "Final Total" as-is (it already exists in your new file)
+# Your disagreement columns already exist: diff_Methods, diff_Impact, ... (great!)
+
 
 # ===================== SIDEBAR FILTERS =====================
 
