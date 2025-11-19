@@ -764,7 +764,7 @@ with tab_decision:
 
 # ---------- NEW TAB: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
-        st.subheader("🏷️ Buckets & prioritization")
+    st.subheader("🏷️ Buckets & prioritization")
 
     bucket_options = [
         "1 - Priority multi-sport Paralympic",
