@@ -761,6 +761,7 @@ with tab_decision:
         "Decision_Score = Final_Total (70%) + Innovation_avg (20%) + Impact_avg (10%) "
         "– penalty for Medium/High risk. Adjust the formula in the code if you want different weights."
     )
+
 # ---------- NEW TAB: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
     st.subheader("🏷️ Buckets & prioritization")
@@ -817,7 +818,7 @@ You can change the bucket assignment directly in the table below.
         "4 - Others",
     ]
 
-    # Interactive editor
+    # ---------- 1) Interactive editor ----------
     edited = st.data_editor(
         st.session_state["bucket_df"],
         key="bucket_editor",
@@ -844,7 +845,7 @@ You can change the bucket assignment directly in the table below.
     st.session_state["bucket_df"] = edited
     bucket_df = edited.copy()
 
-    # ---- Summary per bucket ----
+    # ---------- 2) Summary per bucket ----------
     if "Bucket" in bucket_df.columns:
         summary = (
             bucket_df
@@ -857,9 +858,8 @@ You can change the bucket assignment directly in the table below.
             .reset_index()
         )
 
-        # Show high-level summary
         st.markdown("### Bucket summary (counts, sum of budget, average score)")
-        # Format budget nicely
+
         summary_display = summary.copy()
         summary_display["total_budget"] = summary_display["total_budget"].fillna(0)
         summary_display["avg_score"] = summary_display["avg_score"].round(1)
@@ -869,27 +869,54 @@ You can change the bucket assignment directly in the table below.
         summary_display = summary_display[["Bucket", "n_projects", "total_budget_eur", "avg_score"]]
         st.dataframe(summary_display, use_container_width=True)
 
-        # Small visualizations
-        st.markdown("### Visualisation")
-        col_a, col_b = st.columns(2)
+        # ---------- 3) "Board" visualization: 4 buckets with projects inside ----------
+        st.markdown("### Bucket board (projects inside each bucket)")
 
-        with col_a:
-            fig_count = px.bar(
-                summary,
-                x="Bucket",
-                y="n_projects",
-                title="Number of projects per bucket",
-            )
-            st.plotly_chart(fig_count, use_container_width=True)
+        cols_vis = st.columns(4)
+        bucket_order = bucket_options  # fixed order 1–4
 
-        with col_b:
-            fig_budget = px.bar(
-                summary,
-                x="Bucket",
-                y="total_budget",
-                title="Total budget per bucket (EUR)",
-            )
-            fig_budget.update_layout(yaxis_tickprefix="€")
-            st.plotly_chart(fig_budget, use_container_width=True)
+        for bucket_label, col in zip(bucket_order, cols_vis):
+            with col:
+                col.markdown(f"**{bucket_label}**")
+
+                subset = bucket_df[bucket_df["Bucket"] == bucket_label].copy()
+                if subset.empty:
+                    col.caption("No projects assigned.")
+                else:
+                    # Build a compact view: Name, Budget, Total points
+                    display_df = subset.copy()
+
+                    if "Budget_EUR" in display_df.columns:
+                        display_df["Budget_EUR_fmt"] = display_df["Budget_EUR"].apply(
+                            lambda x: f"€{x:,.0f}" if pd.notna(x) else "—"
+                        )
+                    else:
+                        display_df["Budget_EUR_fmt"] = "—"
+
+                    if "Final_Total" in display_df.columns:
+                        display_df["Final_Total_fmt"] = display_df["Final_Total"].apply(
+                            lambda x: f"{x:.1f}" if pd.notna(x) else "—"
+                        )
+                    else:
+                        display_df["Final_Total_fmt"] = "—"
+
+                    display_df = display_df[["Project_Name", "Budget_EUR_fmt", "Final_Total_fmt"]]
+
+                    col.dataframe(
+                        display_df.rename(
+                            columns={
+                                "Project_Name": "Project",
+                                "Budget_EUR_fmt": "Budget",
+                                "Final_Total_fmt": "Total points",
+                            }
+                        ),
+                        use_container_width=True,
+                    )
+
+                    # Sum of budget under the table
+                    total_b = subset["Budget_EUR"].sum() if "Budget_EUR" in subset.columns else 0
+                    col.caption(f"Sum of budget in this bucket: €{total_b:,.0f}")
+
     else:
         st.info("No bucket information available yet.")
+
