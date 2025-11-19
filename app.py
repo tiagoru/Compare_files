@@ -546,4 +546,125 @@ with tab_comments:
     comment_columns = []
     for col in df.columns:
         lc = col.lower()
-        if any(k in
+        if any(k in lc for k in ["comment", "feedback", "text"]):
+            comment_columns.append(col)
+
+    for col in ["Combined_Comments", "Combined_Overall_Feedback", "All_Feedback_Text"]:
+        if col in df.columns and col not in comment_columns:
+            comment_columns.append(col)
+
+    if not comment_columns:
+        st.info("No comment/feedback/text columns found in the file.")
+    else:
+        col_choice = st.selectbox("Select text column", comment_columns)
+
+        # Project selection: "All projects" or specific project (with ID)
+        project_options = ["All projects"]
+        if "Project_Name" in filtered_df.columns:
+            project_options += (
+                filtered_df[["Project_Name", "Project_ID"]]
+                .dropna()
+                .drop_duplicates()
+                .apply(lambda r: f"{r['Project_Name']} (ID: {r['Project_ID']})", axis=1)
+                .tolist()
+            )
+
+        proj_choice = st.selectbox("Select project", project_options)
+
+        subset = filtered_df
+        if (
+            proj_choice != "All projects"
+            and "Project_Name" in filtered_df.columns
+            and "Project_ID" in filtered_df.columns
+        ):
+            try:
+                proj_id_str = proj_choice.split("ID:")[1].rstrip(")")
+                proj_id_str = proj_id_str.strip()
+                subset = filtered_df[filtered_df["Project_ID"].astype(str) == proj_id_str]
+            except Exception:
+                subset = filtered_df[filtered_df["Project_Name"] == proj_choice]
+
+        all_text = " ".join(subset[col_choice].dropna().astype(str))
+
+        if not all_text.strip():
+            st.warning("No text in this column for the selected project(s).")
+        else:
+            wordcloud = WordCloud(
+                width=1200, height=600, background_color="white", collocations=False
+            ).generate(all_text)
+
+            st.markdown("**Word cloud**")
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.imshow(wordcloud, interpolation="bilinear")
+            ax.axis("off")
+            st.pyplot(fig)
+
+            st.markdown("**Top keywords (frequency)**")
+            tokens = re.findall(r"\b\w+\b", all_text.lower())
+            stopwords = {
+                "the", "and", "for", "with", "that", "this", "are", "was", "were",
+                "but", "not", "have", "has", "had", "their", "they", "them",
+                "into", "from", "about", "there", "been", "will", "would",
+                "could", "should", "can", "may", "might", "such", "also",
+                "project", "study", "studies", "research"
+            }
+            words = [w for w in tokens if w not in stopwords and len(w) > 2]
+            if words:
+                freq = Counter(words).most_common(20)
+                freq_df = pd.DataFrame(freq, columns=["word", "count"])
+                fig_kw = px.bar(freq_df, x="word", y="count", title="Top 20 words in selected comments")
+                st.plotly_chart(fig_kw, use_container_width=True)
+            else:
+                st.info("No significant keywords to display.")
+
+            if proj_choice == "All projects":
+                st.caption("Text aggregated across all filtered projects.")
+            else:
+                st.caption(f"Text for: {proj_choice}")
+
+# ---------- TAB 7: DECISION SUPPORT ----------
+with tab_decision:
+    st.subheader("🧠 Decision-support ranking")
+
+    def col_or_zero(name: str) -> pd.Series:
+        if name in filtered_df.columns:
+            return filtered_df[name]
+        return pd.Series(0, index=filtered_df.index)
+
+    # Risk penalty: High = 10, Medium = 5, else 0
+    if "Risk_Category" in filtered_df.columns:
+        rc = filtered_df["Risk_Category"].fillna("").str.lower()
+        risk_penalty = (
+            (rc.str.contains("high").astype(int) * 10)
+            + (rc.str.contains("medium").astype(int) * 5)
+        )
+    else:
+        risk_penalty = pd.Series(0, index=filtered_df.index)
+
+    decision_score = (
+        col_or_zero("Final_Total") * 0.7 +
+        col_or_zero("Innovation_avg") * 0.2 +
+        col_or_zero("Impact_avg") * 0.1 -
+        risk_penalty
+    )
+
+    filtered_df["Decision_Score"] = decision_score
+
+    top_n = st.slider("Number of projects to display", 5, min(20, len(filtered_df)), 10)
+    ranked = filtered_df.sort_values("Decision_Score", ascending=False).head(top_n)
+
+    st.markdown("**Ranked projects (higher = more favourable)**")
+    show_cols = [c for c in [
+        "Project_ID", "Project_Name",
+        "Decision_Score",
+        "Final_Total",
+        "Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg",
+        "Risk_Category",
+        "Funding_Band",
+    ] if c in ranked.columns]
+    st.dataframe(ranked[show_cols], use_container_width=True)
+
+    st.caption(
+        "Decision_Score = Final_Total (70%) + Innovation_avg (20%) + Impact_avg (10%) "
+        "– penalty for Medium/High risk. Adjust the formula in the code if you want different weights."
+    )
