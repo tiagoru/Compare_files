@@ -849,27 +849,54 @@ with tab_buckets:
         bucket_df["State"] = ""
 
     # ---- If CSV uploaded, override Bucket/Flag/State where IDs match ----
+    # ---- If CSV uploaded, override Bucket/Flag/State where IDs match ----
     if upload_bucket_file is not None:
         prev_csv = pd.read_csv(upload_bucket_file)
+
+        # We need at least Project_ID and Bucket
         if "Project_ID" in prev_csv.columns and "Bucket" in prev_csv.columns:
             prev_csv["Project_ID"] = prev_csv["Project_ID"].astype(str)
             bucket_df["Project_ID"] = bucket_df["Project_ID"].astype(str)
+
+            # Build list of columns that actually exist in the CSV
+            merge_cols = ["Project_ID", "Bucket"]
+            if "Flag" in prev_csv.columns:
+                merge_cols.append("Flag")
+            if "State" in prev_csv.columns:
+                merge_cols.append("State")
+
+            prev_use = prev_csv[merge_cols].copy()
+
+            # Ensure Flag / State exist (even if they weren't in the CSV)
+            if "Flag" not in prev_use.columns:
+                prev_use["Flag"] = False
+            if "State" not in prev_use.columns:
+                prev_use["State"] = ""
+
+            # Merge CSV info onto current bucket_df
             bucket_df = bucket_df.merge(
-                prev_csv[["Project_ID", "Bucket", "Flag", "State"]].fillna({"Flag": False, "State": ""}),
+                prev_use,
                 on="Project_ID",
                 how="left",
                 suffixes=("", "_csv"),
             )
 
-            # Override bucket/flag/state when CSV values exist
-            bucket_df["Bucket"] = bucket_df["Bucket_csv"].combine_first(bucket_df["Bucket"])
-            bucket_df["Flag"] = bucket_df["Flag_csv"].combine_first(bucket_df["Flag"])
-            bucket_df["State"] = bucket_df["State_csv"].combine_first(bucket_df["State"])
+            # Override bucket/flag/state with CSV values where they exist
+            for col in ["Bucket", "Flag", "State"]:
+                csv_col = col + "_csv"
+                if csv_col in bucket_df.columns:
+                    bucket_df[col] = bucket_df[csv_col].combine_first(bucket_df[col])
 
-            bucket_df.drop(columns=[c for c in bucket_df.columns if c.endswith("_csv")], inplace=True)
+            # Clean up temporary _csv columns
+            bucket_df.drop(
+                columns=[c for c in bucket_df.columns if c.endswith("_csv")],
+                inplace=True,
+            )
 
             st.success("Loaded previous bucket assignments from CSV (for matching Project_IDs).")
         else:
+            st.warning("CSV must contain at least 'Project_ID' and 'Bucket' columns.")
+
             st.warning("CSV must contain at least 'Project_ID' and 'Bucket' columns.")
 
     # ---------- 1) Interactive editor ----------
