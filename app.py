@@ -185,20 +185,33 @@ if big_diff_cols:
 else:
     filtered_df["Any_big_diff"] = False
     filtered_df["Max_diff"] = 0
-    
+
+
+
+# Group column from Category_51_review1 (or fallback)
+if "Category_51_review1" in df.columns:
+    df["Group"] = df["Category_51_review1"]
+elif "Category_51_review2" in df.columns:
+    df["Group"] = df["Category_51_review2"]
+else:
+    df["Group"] = df.get("Category", "")
+# ===================== BUCKET HELPER =====================
+
 # ===================== BUCKET HELPER =====================
 
 def infer_bucket(row) -> str:
     """
-    Default bucket assignment based on Multi_Sport & Category text.
-    You can tweak this logic as needed.
+    Default bucket assignment based on Multi_Sport and Group/Category text.
     """
     multi = str(row.get("Multi_Sport", "")).strip().lower()
+    group = str(row.get("Group", "")).strip().lower()
     cat = str(row.get("Category", "")).strip().lower()
 
     is_multi = multi in ["yes", "y", "true", "1", "multi", "multi-sport"]
-    is_paralympic = "paralympic" in cat
-    is_para = "para" in cat  # catches para-sport / para sport etc.
+    text = f"{group} {cat}"
+
+    is_paralympic = "paralympic" in text
+    is_para = "para" in text  # captures para-sport, para sport, etc.
 
     if is_paralympic and is_multi:
         return "1 - Priority multi-sport Paralympic"
@@ -209,313 +222,6 @@ def infer_bucket(row) -> str:
     else:
         return "4 - Others"
 
-# ===================== TOP METRICS =====================
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric("Number of projects", len(filtered_df))
-
-with col2:
-    if "Final_Total" in filtered_df.columns:
-        st.metric("Average Final Total", f"{filtered_df['Final_Total'].mean():.1f}")
-    else:
-        st.metric("Average Final Total", "N/A")
-
-with col3:
-    if "Budget_EUR" in filtered_df.columns and filtered_df["Budget_EUR"].notna().any():
-        st.metric("Total budget (filtered)", f"€{filtered_df['Budget_EUR'].sum():,.0f}")
-    else:
-        st.metric("Total budget (filtered)", "N/A")
-
-with col4:
-    if "Funding_Band" in filtered_df.columns:
-        st.metric("Funding bands used", int(filtered_df["Funding_Band"].nunique()))
-    else:
-        st.metric("Funding bands used", "N/A")
-
-st.markdown("---")
-
-# ===================== TABS =====================
-
-tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets = st.tabs(
-    [
-        "📁 Overview",
-        "📈 Scores & funding",
-        "⚖️ Reviewer agreement",
-        "🚥 Risk & sentiment",
-        "🧬 Project profiles",
-        "🗯️ Comment insights",
-        "🧠 Decision support",
-        "🏷️ Buckets & prioritization",
-    ]
-)
-
-# ---------- TAB 1: OVERVIEW ----------
-with tab_overview:
-    st.subheader("Project overview (after filters)")
-
-    cols_to_show = [c for c in [
-        "Project_ID", "Project_Name", "Final_Total",
-        "Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg",
-        "Budget_EUR",
-        "Risk_Category", "Funding_Band", "Project duration", "alert",
-    ] if c in filtered_df.columns]
-
-    if "Final_Total" in cols_to_show:
-        view_df = filtered_df[cols_to_show].sort_values("Final_Total", ascending=False)
-    else:
-        view_df = filtered_df[cols_to_show]
-
-    if "Budget_EUR" in view_df.columns:
-        styled = view_df.style.format({"Budget_EUR": "€{:,.0f}".format})
-        st.dataframe(styled, use_container_width=True)
-    else:
-        st.dataframe(view_df, use_container_width=True)
-
-# ---------- TAB 2: SCORES & FUNDING ----------
-with tab_scores:
-    st.subheader("Score distributions")
-
-    # Histogram & bar by project
-    score_options = []
-    if "Final_Total" in filtered_df.columns:
-        score_options.append("Final_Total")
-    for label, _, _ in score_pairs:
-        col_name = f"{label}_avg"
-        if col_name in filtered_df.columns:
-            score_options.append(col_name)
-
-    if not score_options:
-        st.info("No numeric score columns found.")
-    else:
-        selected_score = st.selectbox("Select score to analyse", score_options)
-
-        fig_hist = px.histogram(filtered_df, x=selected_score, nbins=15)
-        st.plotly_chart(fig_hist, use_container_width=True)
-
-        if "Project_Name" in filtered_df.columns:
-            hover_cols = []
-            if "Funding_Band" in filtered_df.columns:
-                hover_cols.append("Funding_Band")
-            if "Budget_EUR" in filtered_df.columns:
-                hover_cols.append("Budget_EUR")
-
-            fig_bar = px.bar(
-                filtered_df.sort_values(by=selected_score, ascending=False),
-                x="Project_Name",
-                y=selected_score,
-                color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
-                hover_data=hover_cols or None,
-                title=f"{selected_score} by project",
-            )
-            fig_bar.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-    st.markdown("### Funding efficiency")
-
-    # Box plot: Final_Total by Funding_Band
-    if "Final_Total" in filtered_df.columns and "Funding_Band" in filtered_df.columns:
-        fig_box = px.box(
-            filtered_df,
-            x="Funding_Band",
-            y="Final_Total",
-            color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
-            title="Distribution of Final Scores by Funding Band",
-        )
-        st.plotly_chart(fig_box, use_container_width=True)
-    else:
-        st.info("Need 'Final_Total' and 'Funding_Band' for funding efficiency analysis.")
-
-    st.markdown("### Budget distribution")
-    if "Budget_EUR" in filtered_df.columns and filtered_df["Budget_EUR"].notna().any():
-        fig_budget = px.histogram(
-            filtered_df,
-            x="Budget_EUR",
-            nbins=15,
-            title="Budget (EUR) distribution"
-        )
-        st.plotly_chart(fig_budget, use_container_width=True)
-    else:
-        st.info("No budget data available.")
-
-    st.markdown("### Final score vs risk (bubble chart)")
-    if "Final_Total" in filtered_df.columns and "Risk_Category" in filtered_df.columns:
-        fig_bubble = px.scatter(
-            filtered_df,
-            x="Final_Total",
-            y="Risk_Category",
-            size="Innovation_avg" if "Innovation_avg" in filtered_df.columns else None,
-            color="Risk_Category",
-            hover_data=[
-                col for col in ["Project_ID", "Project_Name", "Funding_Band", "Budget_EUR"]
-                if col in filtered_df.columns
-            ],
-            title="Final score vs risk (bubble size = Innovation score)",
-        )
-        st.plotly_chart(fig_bubble, use_container_width=True)
-
-# ---------- TAB 3: REVIEWER AGREEMENT ----------
-with tab_agreement:
-    st.subheader("Reviewer agreement (projects with ≥ 4-point difference in any item)")
-
-    # Only projects that have at least one big diff in Methods/Impact/Innovation/Plan/Team
-    big_df = filtered_df[filtered_df["Any_big_diff"]] if "Any_big_diff" in filtered_df.columns else pd.DataFrame()
-
-    if big_df.empty:
-        st.info("No projects with ≥ 4-point difference in any of Methods / Impact / Innovation / Plan / Team.")
-    else:
-        # Dimension -> (reviewer1_col, reviewer2_col, diff_col)
-        dim_info = {
-            "Methods":    ("Methods_53_review1",    "Methods_53_review2",    "diff_Methods"),
-            "Impact":     ("Impact_54_review1",     "Impact_54_review2",     "diff_Impact"),
-            "Innovation": ("Innovation_55_review1", "Innovation_55_review2", "diff_Innovation"),
-            "Plan":       ("Plan_56_review1",       "Plan_56_review2",       "diff_Plan"),
-            "Team":       ("Team_57_review1",       "Team_57_review2",       "diff_Team"),
-        }
-
-        dim_info = {
-            name: (c1, c2, cdiff)
-            for name, (c1, c2, cdiff) in dim_info.items()
-            if c1 in big_df.columns and c2 in big_df.columns and cdiff in big_df.columns
-        }
-
-        if not dim_info:
-            st.info("Reviewer score columns not found for Methods/Impact/Innovation/Plan/Team.")
-        else:
-            dim = st.selectbox("Dimension", list(dim_info.keys()))
-            c1, c2, cdiff = dim_info[dim]
-
-            cols = ["Project_ID", "Project_Name", c1, c2, cdiff]
-            if "Budget_EUR" in big_df.columns:
-                cols.append("Budget_EUR")
-
-            temp = big_df[cols].dropna()
-            temp["abs_diff"] = temp[cdiff].abs()
-            temp = temp[temp["abs_diff"] >= 4]
-
-            if temp.empty:
-                st.info(f"No projects with ≥ 4-point difference in {dim}.")
-            else:
-                hover_cols = ["Project_ID", c1, c2]
-                if "Budget_EUR" in temp.columns:
-                    hover_cols.append("Budget_EUR")
-
-                fig_diff = px.bar(
-                    temp.sort_values("abs_diff", ascending=False),
-                    x="Project_Name",
-                    y="abs_diff",
-                    hover_data=hover_cols,
-                    title=f"Reviewer disagreement on {dim} (diff ≥ 4)",
-                )
-                fig_diff.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_diff, use_container_width=True)
-
-                st.markdown("**Projects with ≥ 4-point difference in this dimension:**")
-                show_cols = ["Project_ID", "Project_Name", c1, c2, "abs_diff"]
-                if "Budget_EUR" in temp.columns:
-                    show_cols.append("Budget_EUR")
-
-                st.dataframe(
-                    temp[show_cols].sort_values("abs_diff", ascending=False),
-                    use_container_width=True,
-                )
-
-    st.markdown("### Average differences by criterion")
-    if big_diff_cols:
-        mean_diffs = filtered_df[big_diff_cols].abs().mean()
-        heat_df = pd.DataFrame({"Dimension": mean_diffs.index, "Mean_abs_diff": mean_diffs.values})
-        fig_heat = px.imshow(
-            [heat_df["Mean_abs_diff"].values],
-            x=heat_df["Dimension"],
-            y=["Avg diff"],
-            color_continuous_scale="Reds",
-            aspect="auto",
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
-
-    st.markdown("### Reviewer 1 vs Reviewer 2 total score")
-    if "Total_58_review1" in filtered_df.columns and "Total_58_review2" in filtered_df.columns:
-        fig_r12 = px.scatter(
-            filtered_df,
-            x="Total_58_review1",
-            y="Total_58_review2",
-            hover_data=[
-                col for col in ["Project_ID", "Project_Name", "Budget_EUR"]
-                if col in filtered_df.columns
-            ],
-            title="Reviewer 1 vs Reviewer 2 total scores",
-        )
-        fig_r12.add_shape(
-            type="line",
-            x0=filtered_df["Total_58_review1"].min(),
-            y0=filtered_df["Total_58_review1"].min(),
-            x1=filtered_df["Total_58_review1"].max(),
-            y1=filtered_df["Total_58_review1"].max(),
-        )
-        st.plotly_chart(fig_r12, use_container_width=True)
-
-# ---------- TAB 4: RISK & SENTIMENT ----------
-with tab_risk:
-    st.subheader("Risk & sentiment overview")
-
-    cols = [c for c in [
-        "Project_ID", "Project_Name",
-        "Risk_Category",
-        sentiment_label_col,
-        sentiment_num_col,
-        "Final_Total",
-        "Budget_EUR",
-    ] if c is not None and c in filtered_df.columns]
-
-    if cols:
-        st.markdown("**Projects with risk and sentiment:**")
-        st.dataframe(filtered_df[cols], use_container_width=True)
-    else:
-        st.info("No risk/sentiment columns available.")
-
-    # Scatter: Final_Total vs sentiment (not used now, no sentiment fields)
-    if sentiment_num_col and sentiment_num_col in filtered_df.columns and "Final_Total" in filtered_df.columns:
-        fig_scatter = px.scatter(
-            filtered_df,
-            x="Final_Total",
-            y=sentiment_num_col,
-            color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
-            hover_data=["Project_ID", "Project_Name"],
-            title=f"Final_Total vs {sentiment_num_col}",
-        )
-        st.plotly_chart(fig_scatter, use_container_width=True)
-
-    st.markdown("### Inspect single project")
-    if "Project_Name" in filtered_df.columns:
-        project_list = filtered_df["Project_Name"].dropna().unique().tolist()
-        selected_project = st.selectbox("Select project", project_list)
-
-        proj_rows = filtered_df[filtered_df["Project_Name"] == selected_project]
-        row = proj_rows.iloc[0]
-
-        st.markdown(f"**Project ID:** {row.get('Project_ID', 'N/A')}")
-        st.markdown(f"**Risk:** {row.get('Risk_Category', 'N/A')}")
-        st.markdown(f"**Final total:** {row.get('Final_Total', 'N/A')}")
-        st.markdown(f"**Budget (EUR):** {row.get('Budget_EUR', 'N/A')}")
-
-        if sentiment_label_col:
-            st.markdown(f"**Sentiment label:** {row.get(sentiment_label_col, 'N/A')}")
-        if sentiment_num_col:
-            st.markdown(f"**Sentiment score:** {row.get(sentiment_num_col, 'N/A')}")
-
-        if "Combined_Comments" in row:
-            with st.expander("Combined comments"):
-                st.write(row["Combined_Comments"])
-        if "Combined_Overall_Feedback" in row:
-            with st.expander("Combined overall feedback"):
-                st.write(row["Combined_Overall_Feedback"])
-        if "All_Feedback_Text" in row:
-            with st.expander("All feedback text"):
-                st.write(row["All_Feedback_Text"])
-        if "Risk_Explanation" in row:
-            with st.expander("Risk explanation"):
-                st.write(row["Risk_Explanation"])
 
 # ---------- TAB 5: PROJECT PROFILES ----------
 with tab_profiles:
@@ -763,6 +469,7 @@ with tab_decision:
     )
 
 # ---------- NEW TAB: BUCKETS & PRIORITIZATION ----------
+# ---------- TAB: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
     st.subheader("🏷️ Buckets & prioritization")
 
@@ -780,35 +487,25 @@ You can change the bucket assignment directly in the table below.
     )
 
     # Base dataframe for bucket assignments (only current filtered projects)
-    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category"]
+    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
     base_cols = [c for c in base_cols if c in filtered_df.columns]
     base_df = filtered_df[base_cols].copy()
 
-    # Initialise or update session_state bucket dataframe
-    if "bucket_df" not in st.session_state:
-        # First time: assign default buckets via rules
-        bucket_df = base_df.copy()
-        bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
-    else:
-        # Keep previous assignments where possible
-        prev = st.session_state["bucket_df"]
+    # --- Stable bucket state in session_state ---
+    if "bucket_map" not in st.session_state:
+        st.session_state["bucket_map"] = {}
 
-        # Merge on Project_ID to bring back previous Bucket values
-        if "Project_ID" in base_df.columns and "Project_ID" in prev.columns:
-            bucket_df = base_df.merge(
-                prev[["Project_ID", "Bucket"]],
-                on="Project_ID",
-                how="left",
-                suffixes=("", "_prev"),
-            )
-            # If new rows (no previous bucket), infer default bucket
-            mask = bucket_df["Bucket"].isna()
-            bucket_df.loc[mask, "Bucket"] = bucket_df[mask].apply(infer_bucket, axis=1)
-        else:
-            bucket_df = base_df.copy()
-            bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+    bucket_map = st.session_state["bucket_map"]
 
-    st.session_state["bucket_df"] = bucket_df
+    # Ensure every visible project has a bucket (keep previous, infer only for new)
+    for _, r in base_df.iterrows():
+        pid = r["Project_ID"]
+        if pid not in bucket_map or pd.isna(bucket_map[pid]) or bucket_map[pid] == "":
+            bucket_map[pid] = infer_bucket(r)
+
+    # Build working df with Bucket column from the map
+    bucket_df = base_df.copy()
+    bucket_df["Bucket"] = bucket_df["Project_ID"].map(bucket_map)
 
     # Define allowed bucket labels
     bucket_options = [
@@ -820,7 +517,7 @@ You can change the bucket assignment directly in the table below.
 
     # ---------- 1) Interactive editor ----------
     edited = st.data_editor(
-        st.session_state["bucket_df"],
+        bucket_df,
         key="bucket_editor",
         hide_index=True,
         use_container_width=True,
@@ -841,8 +538,11 @@ You can change the bucket assignment directly in the table below.
         }
     )
 
-    # Save edits back to session_state
-    st.session_state["bucket_df"] = edited
+    # Update the bucket_map from edited table (this fixes the "click twice" problem)
+    for _, r in edited[["Project_ID", "Bucket"]].dropna(subset=["Project_ID"]).iterrows():
+        bucket_map[r["Project_ID"]] = r["Bucket"]
+
+    st.session_state["bucket_map"] = bucket_map
     bucket_df = edited.copy()
 
     # ---------- 2) Summary per bucket ----------
@@ -883,7 +583,6 @@ You can change the bucket assignment directly in the table below.
                 if subset.empty:
                     col.caption("No projects assigned.")
                 else:
-                    # Build a compact view: Name, Budget, Total points
                     display_df = subset.copy()
 
                     if "Budget_EUR" in display_df.columns:
@@ -900,12 +599,16 @@ You can change the bucket assignment directly in the table below.
                     else:
                         display_df["Final_Total_fmt"] = "—"
 
-                    display_df = display_df[["Project_Name", "Budget_EUR_fmt", "Final_Total_fmt"]]
+                    cols_show = ["Project_Name", "Group", "Budget_EUR_fmt", "Final_Total_fmt"]
+                    cols_show = [c for c in cols_show if c in display_df.columns]
+
+                    display_df = display_df[cols_show]
 
                     col.dataframe(
                         display_df.rename(
                             columns={
                                 "Project_Name": "Project",
+                                "Group": "Group",
                                 "Budget_EUR_fmt": "Budget",
                                 "Final_Total_fmt": "Total points",
                             }
@@ -913,10 +616,8 @@ You can change the bucket assignment directly in the table below.
                         use_container_width=True,
                     )
 
-                    # Sum of budget under the table
                     total_b = subset["Budget_EUR"].sum() if "Budget_EUR" in subset.columns else 0
                     col.caption(f"Sum of budget in this bucket: €{total_b:,.0f}")
-
     else:
         st.info("No bucket information available yet.")
 
