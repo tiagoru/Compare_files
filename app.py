@@ -506,9 +506,11 @@ with tab_risk:
         row = proj_rows.iloc[0]
 
         st.markdown(f"**Project ID:** {row.get('Project_ID', 'N/A')}")
+        st.markdown(f"**Project name:** {row.get('Project_Name', 'N/A')}")
         st.markdown(f"**Risk:** {row.get('Risk_Category', 'N/A')}")
         st.markdown(f"**Final total:** {row.get('Final_Total', 'N/A')}")
         st.markdown(f"**Budget (EUR):** {row.get('Budget_EUR', 'N/A')}")
+
 
         if sentiment_label_col:
             st.markdown(f"**Sentiment label:** {row.get(sentiment_label_col, 'N/A')}")
@@ -557,8 +559,11 @@ with tab_profiles:
         )
         st.plotly_chart(fig_radar, use_container_width=True)
 
+        st.markdown(f"**Project ID:** {row.get('Project_ID', 'N/A')}")
+        st.markdown(f"**Project name:** {row.get('Project_Name', 'N/A')}")
         st.markdown(f"**Final total:** {row.get('Final_Total', 'N/A')}")
         st.markdown(f"**Budget (EUR):** {row.get('Budget_EUR', 'N/A')}")
+
 
         # === 5.2 Reviewer comparison per criterion (bar chart) ===
         st.markdown("### Reviewer 1 vs Reviewer 2 per criterion")
@@ -774,6 +779,7 @@ with tab_decision:
     )
 
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
+# ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 with tab_buckets:
     st.subheader("🏷️ Buckets & prioritization")
 
@@ -785,26 +791,67 @@ with tab_buckets:
         "5 - Rejected / Not recommended",
     ]
 
+    state_options = ["", "Approved", "Revision", "3rd review needed"]
+
+    st.markdown("You can edit buckets here, and optionally import/export assignments as CSV.")
+
+    # ---- CSV upload to resume work ----
+    upload_bucket_file = st.file_uploader(
+        "Upload previous bucket assignments (CSV with at least Project_ID and Bucket)",
+        type="csv",
+        key="bucket_assignments_upload",
+    )
+
     # Base dataframe for bucket assignments (only current filtered projects)
     base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
     base_cols = [c for c in base_cols if c in filtered_df.columns]
     base_df = filtered_df[base_cols].copy()
 
-    # --- Stable bucket state in session_state ---
+    # --- Stable state in session_state ---
     if "bucket_map" not in st.session_state:
         st.session_state["bucket_map"] = {}
+    if "flag_map" not in st.session_state:
+        st.session_state["flag_map"] = {}
+    if "state_map" not in st.session_state:
+        st.session_state["state_map"] = {}
 
     bucket_map = st.session_state["bucket_map"]
+    flag_map = st.session_state["flag_map"]
+    state_map = st.session_state["state_map"]
 
-    # Ensure every visible project has a bucket (keep previous, infer only for new)
+    # ---- If CSV uploaded, override maps from file ----
+    if upload_bucket_file is not None:
+        prev = pd.read_csv(upload_bucket_file)
+        if "Project_ID" in prev.columns and "Bucket" in prev.columns:
+            prev["Project_ID"] = prev["Project_ID"].astype(str)
+            for _, r in prev.iterrows():
+                pid = r["Project_ID"]
+                bucket_map[pid] = r["Bucket"]
+                if "Flag" in prev.columns:
+                    val = r["Flag"]
+                    flag_map[pid] = bool(val) if not pd.isna(val) else False
+                if "State" in prev.columns:
+                    val = r["State"]
+                    state_map[pid] = str(val) if not pd.isna(val) else ""
+            st.success("Loaded previous bucket assignments from CSV.")
+        else:
+            st.warning("CSV must contain at least 'Project_ID' and 'Bucket' columns.")
+
+    # ---- Ensure defaults for all visible projects ----
     for _, r in base_df.iterrows():
         pid = r["Project_ID"]
         if pid not in bucket_map or pd.isna(bucket_map[pid]) or bucket_map[pid] == "":
             bucket_map[pid] = infer_bucket(r)
+        if pid not in flag_map:
+            flag_map[pid] = False
+        if pid not in state_map:
+            state_map[pid] = ""
 
-    # Build working df with Bucket column from the map
+    # Build working df with Bucket / Flag / State columns
     bucket_df = base_df.copy()
     bucket_df["Bucket"] = bucket_df["Project_ID"].map(bucket_map)
+    bucket_df["Flag"] = bucket_df["Project_ID"].map(flag_map)
+    bucket_df["State"] = bucket_df["Project_ID"].map(state_map)
 
     # ---------- 1) Interactive editor ----------
     edited = st.data_editor(
@@ -818,19 +865,49 @@ with tab_buckets:
                 options=bucket_options,
                 required=True,
             ),
+            "Flag": st.column_config.CheckboxColumn(
+                "Flag (selected?)",
+                default=False,
+            ),
+            "State": st.column_config.SelectboxColumn(
+                "State",
+                options=state_options,
+                required=False,
+            ),
             "Budget_EUR": st.column_config.NumberColumn("Budget (EUR)", format="€%d"),
             "Final_Total": st.column_config.NumberColumn("Final Total", format="%.1f"),
         }
     )
 
-    # Update the bucket_map from edited table
-    for _, r in edited[["Project_ID", "Bucket"]].dropna(subset=["Project_ID"]).iterrows():
-        bucket_map[r["Project_ID"]] = r["Bucket"]
+    # Update the maps from edited table
+    for _, r in edited[["Project_ID", "Bucket", "Flag", "State"]].dropna(subset=["Project_ID"]).iterrows():
+        pid = r["Project_ID"]
+        bucket_map[pid] = r["Bucket"]
+        flag_map[pid] = bool(r["Flag"])
+        state_val = r["State"]
+        state_map[pid] = "" if pd.isna(state_val) else str(state_val)
 
     st.session_state["bucket_map"] = bucket_map
+    st.session_state["flag_map"] = flag_map
+    st.session_state["state_map"] = state_map
+
     bucket_df = edited.copy()
 
-    # ---------- 2) Summary per bucket ----------
+    # Save full df in session (useful for future extensions / export)
+    st.session_state["bucket_df"] = bucket_df
+
+    # ---------- 2) Download current assignments ----------
+    st.markdown("### Export current bucket assignments")
+    export_cols = [c for c in ["Project_ID", "Project_Name", "Bucket", "Flag", "State", "Budget_EUR", "Final_Total"] if c in bucket_df.columns]
+    export_csv = bucket_df[export_cols].to_csv(index=False)
+    st.download_button(
+        "Download bucket assignments CSV",
+        data=export_csv,
+        file_name="bucket_assignments.csv",
+        mime="text/csv",
+    )
+
+    # ---------- 3) Summary per bucket ----------
     if "Bucket" in bucket_df.columns:
         summary = (
             bucket_df
@@ -854,11 +931,21 @@ with tab_buckets:
         summary_display = summary_display[["Bucket", "n_projects", "total_budget_eur", "avg_score"]]
         st.dataframe(summary_display, use_container_width=True)
 
-        # ---------- 3) Board visualization: 5 buckets with projects inside ----------
+        # ---------- 4) Bucket board (with Project_ID, Flag, State) ----------
+                # ---------- 4) Bucket board (projects inside each bucket) ----------
         st.markdown("### Bucket board (projects inside each bucket)")
 
         cols_vis = st.columns(5)
         bucket_order = bucket_options  # fixed order 1–5
+
+        # Map states to emoji labels
+        state_icon_map = {
+            "Approved": "✅ Approved",
+            "Revision": "🟠 Revision",
+            "3rd review needed": "🔍 3rd review needed",
+            "": "",
+            None: "",
+        }
 
         for bucket_label, col in zip(bucket_order, cols_vis):
             with col:
@@ -868,43 +955,45 @@ with tab_buckets:
                 if subset.empty:
                     col.caption("No projects assigned.")
                 else:
-                    display_df = subset.copy()
-
-                    if "Budget_EUR" in display_df.columns:
-                        display_df["Budget_EUR_fmt"] = display_df["Budget_EUR"].apply(
-                            lambda x: f"€{x:,.0f}" if pd.notna(x) else "—"
-                        )
-                    else:
-                        display_df["Budget_EUR_fmt"] = "—"
-
-                    if "Final_Total" in display_df.columns:
-                        display_df["Final_Total_fmt"] = display_df["Final_Total"].apply(
-                            lambda x: f"{x:.1f}" if pd.notna(x) else "—"
-                        )
-                    else:
-                        display_df["Final_Total_fmt"] = "—"
-
-                    cols_show = ["Project_Name", "Group", "Budget_EUR_fmt", "Final_Total_fmt"]
-                    cols_show = [c for c in cols_show if c in display_df.columns]
-
-                    display_df = display_df[cols_show]
-
-                    col.dataframe(
-                        display_df.rename(
-                            columns={
-                                "Project_Name": "Project",
-                                "Group": "Group",
-                                "Budget_EUR_fmt": "Budget",
-                                "Final_Total_fmt": "Total points",
-                            }
-                        ),
-                        use_container_width=True,
+                    # Format budget & score
+                    subset["Budget_EUR_fmt"] = subset["Budget_EUR"].apply(
+                        lambda x: f"€{x:,.0f}" if pd.notna(x) else "—"
                     )
+                    subset["Final_Total_fmt"] = subset["Final_Total"].apply(
+                        lambda x: f"{x:.1f}" if pd.notna(x) else "—"
+                    )
+
+                    # Emoji state label
+                    subset["State_display"] = subset["State"].map(state_icon_map)
+
+                    cols_show = [
+                        "Project_ID",
+                        "Project_Name",
+                        "Group",
+                        "Flag",
+                        "State_display",
+                        "Budget_EUR_fmt",
+                        "Final_Total_fmt",
+                    ]
+                    cols_show = [c for c in cols_show if c in subset.columns]
+
+                    display_df = subset[cols_show].rename(
+                        columns={
+                            "Project_ID": "ID",
+                            "Project_Name": "Project",
+                            "Group": "Group",
+                            "Flag": "Flag",
+                            "State_display": "State",
+                            "Budget_EUR_fmt": "Budget",
+                            "Final_Total_fmt": "Total points",
+                        }
+                    )
+
+                    col.dataframe(display_df, use_container_width=True)
 
                     total_b = subset["Budget_EUR"].sum() if "Budget_EUR" in subset.columns else 0
                     col.caption(f"Sum of budget in this bucket: €{total_b:,.0f}")
-    else:
-        st.info("No bucket information available yet.")
+
 
 # ---------- TAB 9: DRAG & DROP BUCKET BOARD ----------
 with tab_dragdrop:
