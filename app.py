@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from collections import Counter
 import re
-import numpy as np
 
 # ===================== PAGE CONFIG =====================
 
@@ -66,11 +66,18 @@ df["Funding_Band"] = first_nonnull(
     ["Band_47_review1", "Band_47_review2"],
 )
 
-# Budget total (optional, if you want to show/filter later)
+# Budget total from both reviewers (optional)
 df["Budget_Total"] = first_nonnull(
     df,
     ["Budget_Total_46_review1", "Budget_Total_46_review2"],
 )
+
+# Budget: use review2 as main budget, numeric, euros
+if "Budget_Total_46_review2" in df.columns:
+    df["Budget_Total_46_review2"] = pd.to_numeric(df["Budget_Total_46_review2"], errors="coerce")
+    df["Budget_EUR"] = df["Budget_Total_46_review2"]
+else:
+    df["Budget_EUR"] = np.nan
 
 # Duration -> keep the name your overview tab expects ("Project duration")
 df["Project duration"] = first_nonnull(
@@ -85,15 +92,11 @@ df["Multi_Sport"] = first_nonnull(df, ["Multi_Sport_50_review1", "Multi_Sport_50
 # Alias for Final_Total (your code expects this name)
 if "Final Total" in df.columns and "Final_Total" not in df.columns:
     df["Final_Total"] = df["Final Total"]
-# --- Budget column in euros (from review 2) ---
-if "Budget_Total_46_review2" in df.columns:
-    df["Budget_Total_46_review2"] = pd.to_numeric(df["Budget_Total_46_review2"], errors="coerce")
-    df["Budget_EUR"] = df["Budget_Total_46_review2"]  # alias used in overview
 
-# Risk fields – not in this file; leave empty so app shows N/A where needed.
-# If you later add a risk column, map it to "Risk_Category" here.
+# Risk fields – not in this file; if you later add a risk column, map it to "Risk_Category"
+# e.g. df["Risk_Category"] = df["Some_Risk_Column"]
 
-# Sentiment fields – not present in the new file; keep None.
+# Sentiment fields – not present in the new file; keep None so risk tab hides charts
 sentiment_num_col = None
 sentiment_label_col = None
 
@@ -197,11 +200,10 @@ with col2:
         st.metric("Average Final Total", "N/A")
 
 with col3:
-    if "Risk_Category" in filtered_df.columns:
-        high_risk = filtered_df["Risk_Category"].fillna("").str.contains("High", case=False).sum()
-        st.metric("High-risk projects", int(high_risk))
+    if "Budget_EUR" in filtered_df.columns and filtered_df["Budget_EUR"].notna().any():
+        st.metric("Total budget (filtered)", f"€{filtered_df['Budget_EUR'].sum():,.0f}")
     else:
-        st.metric("High-risk projects", "N/A")
+        st.metric("Total budget (filtered)", "N/A")
 
 with col4:
     if "Funding_Band" in filtered_df.columns:
@@ -226,20 +228,14 @@ tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, t
 )
 
 # ---------- TAB 1: OVERVIEW ----------
-# ---------- TAB 1: OVERVIEW ----------
 with tab_overview:
     st.subheader("Project overview (after filters)")
 
     cols_to_show = [c for c in [
-        "Project_ID",
-        "Project_Name",
-        "Final_Total",
+        "Project_ID", "Project_Name", "Final_Total",
         "Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg",
-        "Budget_EUR",              # <--- NEW COLUMN
-        "Risk_Category",
-        "Funding_Band",
-        "Project duration",
-        "alert",
+        "Budget_EUR",
+        "Risk_Category", "Funding_Band", "Project duration", "alert",
     ] if c in filtered_df.columns]
 
     if "Final_Total" in cols_to_show:
@@ -247,7 +243,6 @@ with tab_overview:
     else:
         view_df = filtered_df[cols_to_show]
 
-    # Format budget as euros (e.g. €12,345)
     if "Budget_EUR" in view_df.columns:
         styled = view_df.style.format({"Budget_EUR": "€{:,.0f}".format})
         st.dataframe(styled, use_container_width=True)
@@ -276,12 +271,18 @@ with tab_scores:
         st.plotly_chart(fig_hist, use_container_width=True)
 
         if "Project_Name" in filtered_df.columns:
+            hover_cols = []
+            if "Funding_Band" in filtered_df.columns:
+                hover_cols.append("Funding_Band")
+            if "Budget_EUR" in filtered_df.columns:
+                hover_cols.append("Budget_EUR")
+
             fig_bar = px.bar(
                 filtered_df.sort_values(by=selected_score, ascending=False),
                 x="Project_Name",
                 y=selected_score,
                 color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
-                hover_data=["Funding_Band"] if "Funding_Band" in filtered_df.columns else None,
+                hover_data=hover_cols or None,
                 title=f"{selected_score} by project",
             )
             fig_bar.update_layout(xaxis_tickangle=-45)
@@ -302,6 +303,18 @@ with tab_scores:
     else:
         st.info("Need 'Final_Total' and 'Funding_Band' for funding efficiency analysis.")
 
+    st.markdown("### Budget distribution")
+    if "Budget_EUR" in filtered_df.columns and filtered_df["Budget_EUR"].notna().any():
+        fig_budget = px.histogram(
+            filtered_df,
+            x="Budget_EUR",
+            nbins=15,
+            title="Budget (EUR) distribution"
+        )
+        st.plotly_chart(fig_budget, use_container_width=True)
+    else:
+        st.info("No budget data available.")
+
     st.markdown("### Final score vs risk (bubble chart)")
     if "Final_Total" in filtered_df.columns and "Risk_Category" in filtered_df.columns:
         fig_bubble = px.scatter(
@@ -310,7 +323,10 @@ with tab_scores:
             y="Risk_Category",
             size="Innovation_avg" if "Innovation_avg" in filtered_df.columns else None,
             color="Risk_Category",
-            hover_data=["Project_ID", "Project_Name", "Funding_Band"] if "Funding_Band" in filtered_df.columns else ["Project_ID", "Project_Name"],
+            hover_data=[
+                col for col in ["Project_ID", "Project_Name", "Funding_Band", "Budget_EUR"]
+                if col in filtered_df.columns
+            ],
             title="Final score vs risk (bubble size = Innovation score)",
         )
         st.plotly_chart(fig_bubble, use_container_width=True)
@@ -346,27 +362,38 @@ with tab_agreement:
             dim = st.selectbox("Dimension", list(dim_info.keys()))
             c1, c2, cdiff = dim_info[dim]
 
-            temp = big_df[["Project_ID", "Project_Name", c1, c2, cdiff]].dropna()
+            cols = ["Project_ID", "Project_Name", c1, c2, cdiff]
+            if "Budget_EUR" in big_df.columns:
+                cols.append("Budget_EUR")
+
+            temp = big_df[cols].dropna()
             temp["abs_diff"] = temp[cdiff].abs()
             temp = temp[temp["abs_diff"] >= 4]
 
             if temp.empty:
                 st.info(f"No projects with ≥ 4-point difference in {dim}.")
             else:
+                hover_cols = ["Project_ID", c1, c2]
+                if "Budget_EUR" in temp.columns:
+                    hover_cols.append("Budget_EUR")
+
                 fig_diff = px.bar(
                     temp.sort_values("abs_diff", ascending=False),
                     x="Project_Name",
                     y="abs_diff",
-                    hover_data=["Project_ID", c1, c2],
+                    hover_data=hover_cols,
                     title=f"Reviewer disagreement on {dim} (diff ≥ 4)",
                 )
                 fig_diff.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig_diff, use_container_width=True)
 
                 st.markdown("**Projects with ≥ 4-point difference in this dimension:**")
+                show_cols = ["Project_ID", "Project_Name", c1, c2, "abs_diff"]
+                if "Budget_EUR" in temp.columns:
+                    show_cols.append("Budget_EUR")
+
                 st.dataframe(
-                    temp[["Project_ID", "Project_Name", c1, c2, "abs_diff"]]
-                    .sort_values("abs_diff", ascending=False),
+                    temp[show_cols].sort_values("abs_diff", ascending=False),
                     use_container_width=True,
                 )
 
@@ -389,7 +416,10 @@ with tab_agreement:
             filtered_df,
             x="Total_58_review1",
             y="Total_58_review2",
-            hover_data=["Project_ID", "Project_Name"],
+            hover_data=[
+                col for col in ["Project_ID", "Project_Name", "Budget_EUR"]
+                if col in filtered_df.columns
+            ],
             title="Reviewer 1 vs Reviewer 2 total scores",
         )
         fig_r12.add_shape(
@@ -411,6 +441,7 @@ with tab_risk:
         sentiment_label_col,
         sentiment_num_col,
         "Final_Total",
+        "Budget_EUR",
     ] if c is not None and c in filtered_df.columns]
 
     if cols:
@@ -419,7 +450,7 @@ with tab_risk:
     else:
         st.info("No risk/sentiment columns available.")
 
-    # Scatter: Final_Total vs sentiment
+    # Scatter: Final_Total vs sentiment (not used now, no sentiment fields)
     if sentiment_num_col and sentiment_num_col in filtered_df.columns and "Final_Total" in filtered_df.columns:
         fig_scatter = px.scatter(
             filtered_df,
@@ -441,11 +472,13 @@ with tab_risk:
 
         st.markdown(f"**Project ID:** {row.get('Project_ID', 'N/A')}")
         st.markdown(f"**Risk:** {row.get('Risk_Category', 'N/A')}")
+        st.markdown(f"**Final total:** {row.get('Final_Total', 'N/A')}")
+        st.markdown(f"**Budget (EUR):** {row.get('Budget_EUR', 'N/A')}")
+
         if sentiment_label_col:
             st.markdown(f"**Sentiment label:** {row.get(sentiment_label_col, 'N/A')}")
         if sentiment_num_col:
             st.markdown(f"**Sentiment score:** {row.get(sentiment_num_col, 'N/A')}")
-        st.markdown(f"**Final total:** {row.get('Final_Total', 'N/A')}")
 
         if "Combined_Comments" in row:
             with st.expander("Combined comments"):
@@ -489,10 +522,12 @@ with tab_profiles:
         )
         st.plotly_chart(fig_radar, use_container_width=True)
 
+        st.markdown(f"**Final total:** {row.get('Final_Total', 'N/A')}")
+        st.markdown(f"**Budget (EUR):** {row.get('Budget_EUR', 'N/A')}")
+
         # === 5.2 Reviewer comparison per criterion (bar chart) ===
         st.markdown("### Reviewer 1 vs Reviewer 2 per criterion")
 
-        # Map dimensions to reviewer columns (new numbering 53–58)
         dim_info = [
             ("Methods",    "Methods_53_review1",    "Methods_53_review2"),
             ("Impact",     "Impact_54_review1",     "Impact_54_review2"),
@@ -502,15 +537,15 @@ with tab_profiles:
             ("Total",      "Total_58_review1",      "Total_58_review2"),
         ]
 
-        rows = []
+        rows_comp = []
         diff_rows = []
         for label, c1, c2 in dim_info:
             if c1 in proj_rows.columns and c2 in proj_rows.columns:
                 s1 = row[c1]
                 s2 = row[c2]
                 if pd.notna(s1) or pd.notna(s2):
-                    rows.append({"Criterion": label, "Reviewer": "Reviewer 1", "Score": s1})
-                    rows.append({"Criterion": label, "Reviewer": "Reviewer 2", "Score": s2})
+                    rows_comp.append({"Criterion": label, "Reviewer": "Reviewer 1", "Score": s1})
+                    rows_comp.append({"Criterion": label, "Reviewer": "Reviewer 2", "Score": s2})
                     diff_rows.append({
                         "Criterion": label,
                         "Reviewer 1": s1,
@@ -518,8 +553,8 @@ with tab_profiles:
                         "Diff (|R1 - R2|)": abs(s1 - s2) if pd.notna(s1) and pd.notna(s2) else None
                     })
 
-        if rows:
-            comp_df = pd.DataFrame(rows)
+        if rows_comp:
+            comp_df = pd.DataFrame(rows_comp)
             fig_comp = px.bar(
                 comp_df,
                 x="Criterion",
@@ -547,7 +582,10 @@ with tab_profiles:
             x="Max_diff",
             y="Final_Total",
             color="Risk_Category" if "Risk_Category" in filtered_df.columns else None,
-            hover_data=["Project_ID", "Project_Name"],
+            hover_data=[
+                col for col in ["Project_ID", "Project_Name", "Budget_EUR"]
+                if col in filtered_df.columns
+            ],
             title="Max reviewer disagreement vs Final Total",
         )
         st.plotly_chart(fig_md, use_container_width=True)
@@ -577,13 +615,21 @@ with tab_comments:
         # Project selection: "All projects" or specific project (with ID)
         project_options = ["All projects"]
         if "Project_Name" in filtered_df.columns:
-            project_options += (
-                filtered_df[["Project_Name", "Project_ID"]]
-                .dropna()
-                .drop_duplicates()
-                .apply(lambda r: f"{r['Project_Name']} (ID: {r['Project_ID']})", axis=1)
-                .tolist()
-            )
+            if "Budget_EUR" in filtered_df.columns:
+                base = filtered_df[["Project_Name", "Project_ID", "Budget_EUR"]]
+            else:
+                base = filtered_df[["Project_Name", "Project_ID"]]
+
+            base = base.dropna(subset=["Project_Name", "Project_ID"]).drop_duplicates()
+
+            def project_label(row):
+                name = row["Project_Name"]
+                pid = row["Project_ID"]
+                if "Budget_EUR" in row and pd.notna(row.get("Budget_EUR", np.nan)):
+                    return f"{name} (ID: {pid}, €{row['Budget_EUR']:,.0f})"
+                return f"{name} (ID: {pid})"
+
+            project_options += base.apply(project_label, axis=1).tolist()
 
         proj_choice = st.selectbox("Select project", project_options)
 
@@ -594,8 +640,12 @@ with tab_comments:
             and "Project_ID" in filtered_df.columns
         ):
             try:
-                proj_id_str = proj_choice.split("ID:")[1].rstrip(")")
-                proj_id_str = proj_id_str.strip()
+                # extract ID between "ID:" and either comma or closing parenthesis
+                after_id = proj_choice.split("ID:")[1].strip()
+                if "," in after_id:
+                    proj_id_str = after_id.split(",")[0].strip()
+                else:
+                    proj_id_str = after_id.rstrip(")").strip()
                 subset = filtered_df[filtered_df["Project_ID"].astype(str) == proj_id_str]
             except Exception:
                 subset = filtered_df[filtered_df["Project_Name"] == proj_choice]
@@ -605,6 +655,7 @@ with tab_comments:
         if not all_text.strip():
             st.warning("No text in this column for the selected project(s).")
         else:
+            # Word cloud
             wordcloud = WordCloud(
                 width=1200, height=600, background_color="white", collocations=False
             ).generate(all_text)
@@ -615,6 +666,7 @@ with tab_comments:
             ax.axis("off")
             st.pyplot(fig)
 
+            # Simple keyword frequency bar chart
             st.markdown("**Top keywords (frequency)**")
             tokens = re.findall(r"\b\w+\b", all_text.lower())
             stopwords = {
@@ -651,8 +703,8 @@ with tab_decision:
     if "Risk_Category" in filtered_df.columns:
         rc = filtered_df["Risk_Category"].fillna("").str.lower()
         risk_penalty = (
-            (rc.str.contains("high").astype(int) * 10)
-            + (rc.str.contains("medium").astype(int) * 5)
+            (rc.str_contains("high").astype(int) * 10)
+            + (rc.str_contains("medium").astype(int) * 5)
         )
     else:
         risk_penalty = pd.Series(0, index=filtered_df.index)
@@ -674,6 +726,7 @@ with tab_decision:
         "Project_ID", "Project_Name",
         "Decision_Score",
         "Final_Total",
+        "Budget_EUR",
         "Methods_avg", "Impact_avg", "Innovation_avg", "Plan_avg", "Team_avg",
         "Risk_Category",
         "Funding_Band",
