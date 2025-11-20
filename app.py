@@ -248,7 +248,7 @@ st.markdown("---")
 
 # ===================== TABS =====================
 
-tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets, tab_bucket_bands = st.tabs(
+tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets, tab_bucket_bands, tab_dragdrop = st.tabs(
     [
         "📁 Overview",
         "📈 Scores & funding",
@@ -259,6 +259,7 @@ tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, t
         "🧠 Decision support",
         "🏷️ Buckets & prioritization",
         "💶 Buckets by funding band",
+        "🖱️ Drag & drop buckets",
     ]
 )
 
