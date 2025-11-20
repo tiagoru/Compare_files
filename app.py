@@ -999,6 +999,8 @@ with tab_buckets:
     # 🔑 From here on, edited is the source of truth
     bucket_df = edited.copy()
     st.session_state["bucket_df"] = bucket_df
+    # Optional: overwrite the global bucket assignments so other tabs use the 4-bucket version
+    st.session_state["bucket_df"] = bucket_df
 
     # ---------- 2) Download current assignments ----------
     st.markdown("### Export current bucket assignments")
