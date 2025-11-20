@@ -1356,11 +1356,12 @@ with tab_buckets4:
     )
 
     # ---- CSV upload to resume work ----
-    upload_bucket_file = st.file_uploader(
-        "Upload previous 4-bucket assignments (CSV with at least Project_ID and Bucket)",
-        type="csv",
-        key="bucket4_assignments_upload",
-    )
+  upload_bucket_file = st.file_uploader(
+    "Upload previous 4-bucket assignments (CSV with at least Project_ID and Bucket)",
+    type="csv",
+    key="bucket4_assignments_upload_v2",  # ← new unique key
+)
+
 
     # Base dataframe for current filtered projects
     base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
