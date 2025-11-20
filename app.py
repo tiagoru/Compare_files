@@ -248,7 +248,7 @@ st.markdown("---")
 
 # ===================== TABS =====================
 
-tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets, tab_dragdrop = st.tabs(
+tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, tab_decision, tab_buckets, tab_bucket_bands = st.tabs(
     [
         "📁 Overview",
         "📈 Scores & funding",
@@ -258,9 +258,10 @@ tab_overview, tab_scores, tab_agreement, tab_risk, tab_profiles, tab_comments, t
         "🗯️ Comment insights",
         "🧠 Decision support",
         "🏷️ Buckets & prioritization",
-        "🖱️ Drag & drop buckets",
+        "💶 Buckets by funding band",
     ]
 )
+
 
 # ---------- TAB 1: OVERVIEW ----------
 with tab_overview:
@@ -1080,6 +1081,110 @@ with tab_buckets:
                     )
     else:
         st.info("No bucket information available yet.")
+
+# ---------- NEW TAB: BUCKETS BY FUNDING BAND ----------
+with tab_bucket_bands:
+    st.subheader("💶 Buckets by funding band")
+
+    st.markdown(
+        "Upload a bucket-assignments CSV (or reuse the current bucket table) "
+        "to see how each bucket is distributed across funding bands."
+    )
+
+    # 1) Option to load a CSV with bucket assignments
+    upload_band_file = st.file_uploader(
+        "Upload bucket assignments CSV (same format as the export from the Buckets tab)",
+        type="csv",
+        key="bucket_band_csv",
+    )
+
+    band_df = None
+
+    if upload_band_file is not None:
+        # Use the uploaded CSV
+        band_df = pd.read_csv(upload_band_file)
+        st.success("Loaded bucket assignments from uploaded CSV.")
+    elif "bucket_df" in st.session_state:
+        # Fallback: use current in-memory bucket_df
+        band_df = st.session_state["bucket_df"].copy()
+        st.info("Using current in-memory bucket assignments from the Buckets tab.")
+    else:
+        st.warning("No bucket assignments available yet. Go to 'Buckets & prioritization' first, or upload a CSV.")
+        st.stop()
+
+    # Ensure Project_ID is string for joining
+    if "Project_ID" in band_df.columns:
+        band_df["Project_ID"] = band_df["Project_ID"].astype(str)
+    if "Project_ID" in df.columns:
+        df["Project_ID"] = df["Project_ID"].astype(str)
+
+    # 2) Bring in Funding_Band and Budget_EUR from the main dataframe if missing
+    merge_cols = ["Project_ID"]
+    if "Funding_Band" in df.columns and "Funding_Band" not in band_df.columns:
+        merge_cols.append("Funding_Band")
+    if "Budget_EUR" in df.columns and "Budget_EUR" not in band_df.columns:
+        merge_cols.append("Budget_EUR")
+    if "Final_Total" in df.columns and "Final_Total" not in band_df.columns:
+        merge_cols.append("Final_Total")
+
+    if len(merge_cols) > 1:
+        meta = df[merge_cols].drop_duplicates("Project_ID")
+        band_df = band_df.merge(meta, on="Project_ID", how="left")
+
+    # Basic sanity: keep only rows with a bucket
+    if "Bucket" not in band_df.columns:
+        st.error("The bucket data does not contain a 'Bucket' column.")
+        st.stop()
+
+    band_df = band_df[band_df["Bucket"].notna()]
+
+    if band_df.empty:
+        st.warning("No projects with bucket assignments found.")
+        st.stop()
+
+    # 3) Summary Bucket × Funding_Band
+    if "Funding_Band" not in band_df.columns:
+        st.warning("No 'Funding_Band' column available in the data to split by.")
+        st.stop()
+
+    st.markdown("### Bucket × Funding band summary")
+
+    summary = (
+        band_df
+        .groupby(["Bucket", "Funding_Band"], dropna=False)
+        .agg(
+            n_projects=("Project_ID", "nunique"),
+            total_budget=("Budget_EUR", "sum"),
+            avg_score=("Final_Total", "mean"),
+        )
+        .reset_index()
+    )
+
+    summary["total_budget"] = summary["total_budget"].fillna(0)
+    summary["avg_score"] = summary["avg_score"].round(1)
+    summary["total_budget_eur"] = summary["total_budget"].apply(lambda x: f"€{x:,.0f}")
+
+    summary_display = summary[["Bucket", "Funding_Band", "n_projects", "total_budget_eur", "avg_score"]].rename(
+        columns={
+            "n_projects": "Projects",
+            "total_budget_eur": "Total budget",
+            "avg_score": "Avg score",
+        }
+    )
+
+    st.dataframe(summary_display, use_container_width=True)
+
+    # 4) Optional: per-bucket breakdown in separate sections
+    st.markdown("### Per-bucket funding band breakdown")
+
+    for bucket_label in sorted(summary["Bucket"].dropna().unique()):
+        st.markdown(f"**{bucket_label}**")
+
+        sub = summary_display[summary_display["Bucket"] == bucket_label].copy()
+        sub = sub.drop(columns=["Bucket"])
+
+        st.dataframe(sub, use_container_width=True)
+
 
 # ---------- TAB 9: DRAG & DROP BUCKET BOARD ----------
 with tab_dragdrop:
