@@ -1718,33 +1718,7 @@ with tab_buckets4_viz:
     # Nice default label for state (even if empty)
     vis_df["State_clean"] = vis_df["State"].replace("", "No state").fillna("No state")
 
-    # ---------------------------------------
-    # 2) Treemap: Budget by Bucket → State → Project
-    # ---------------------------------------
-    st.markdown("### Treemap: budget by bucket, state and project")
-
-    if (vis_df["Budget_EUR"] > 0).any():
-        fig_tree = px.treemap(
-            vis_df,
-            path=["Bucket", "State_clean", "Project_Name"],
-            values="Budget_EUR",
-            color="Bucket",
-            hover_data={
-                "Project_ID": True,
-                "Budget_EUR": ":,.0f",
-                "Final_Total": ":.1f",
-            },
-        )
-    else:
-        # If budgets are missing/zero, fall back to a count-based treemap
-        fig_tree = px.treemap(
-            vis_df,
-            path=["Bucket", "State_clean", "Project_Name"],
-            color="Bucket",
-        )
-
-    fig_tree.update_layout(margin=dict(t=40, l=0, r=0, b=0))
-    st.plotly_chart(fig_tree, use_container_width=True)
+ 
 
     # ---------------------------------------
     # 3) Stacked bar: budget per state inside each bucket
@@ -1773,37 +1747,7 @@ with tab_buckets4_viz:
     fig_bar.update_layout(yaxis_tickformat=",.0f")
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    # ---------------------------------------
-    # 4) Bubble chart: projects by score & budget, coloured by bucket/state
-    # ---------------------------------------
-    st.markdown("### Bubble chart: projects by score and budget")
-
-    if vis_df["Final_Total"].notna().any() and vis_df["Budget_EUR"].notna().any():
-        fig_scatter = px.scatter(
-            vis_df,
-            x="Final_Total",
-            y="Budget_EUR",
-            size="Budget_EUR",
-            color="Bucket",
-            symbol="State_clean",
-            hover_data=[
-                "Project_ID",
-                "Project_Name",
-                "Bucket",
-                "State_clean",
-                "Budget_EUR",
-            ],
-            labels={
-                "Final_Total": "Final score",
-                "Budget_EUR": "Budget (EUR)",
-                "State_clean": "State",
-            },
-            title="Projects by final score and budget (size = budget)",
-        )
-        fig_scatter.update_layout(yaxis_tickformat=",.0f")
-        st.plotly_chart(fig_scatter, use_container_width=True)
-    else:
-        st.info("Not enough data to plot score vs budget bubble chart.")
+   
 
     # ---------------------------------------
     # 5) Vertical board: one section per bucket (no side-by-side columns)
