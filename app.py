@@ -1360,7 +1360,7 @@ with tab_buckets4:
     "Upload previous 4-bucket assignments (CSV with at least Project_ID and Bucket)",
     type="csv",
     key="bucket4_assignments_upload_v2",  # ← new unique key
-)
+  )
 
 
     # Base dataframe for current filtered projects
