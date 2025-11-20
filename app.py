@@ -999,8 +999,7 @@ with tab_buckets:
     # 🔑 From here on, edited is the source of truth
     bucket_df = edited.copy()
     st.session_state["bucket_df"] = bucket_df
-    # Optional: overwrite the global bucket assignments so other tabs use the 4-bucket version
-    st.session_state["bucket_df"] = bucket_df
+
 
     # ---------- 2) Download current assignments ----------
     st.markdown("### Export current bucket assignments")
@@ -1570,6 +1569,7 @@ with tab_buckets4:
 
         # ---------- 4) Bucket board (projects inside each bucket) ----------
        # ---------- NEW TAB: 4-BUCKET VIEW WITH EXTENDED STATES ----------
+# ---------- NEW TAB: 4-BUCKET VIEW WITH EXTENDED STATES ----------
 with tab_buckets4:
     st.subheader("🏷️ Buckets (4 only) & extended status")
 
@@ -1599,7 +1599,15 @@ with tab_buckets4:
     )
 
     # Base dataframe for current filtered projects
-    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
+    base_cols = [
+        "Project_ID",
+        "Project_Name",
+        "Budget_EUR",
+        "Final_Total",
+        "Multi_Sport",
+        "Category",
+        "Group",
+    ]
     base_cols = [c for c in base_cols if c in filtered_df.columns]
     base_df = filtered_df[base_cols].copy()
 
@@ -1693,7 +1701,7 @@ with tab_buckets4:
                 inplace=True,
             )
 
-            # After loading, again coerce any bucket not in the 4-bucket set to "4 - Others"
+            # After loading, again coerce buckets not in the 4-bucket set to "4 - Others"
             bucket_df["Bucket"] = bucket_df["Bucket"].where(
                 bucket_df["Bucket"].isin(valid_buckets),
                 "4 - Others",
@@ -1724,8 +1732,14 @@ with tab_buckets4:
                 options=state_options,
                 required=False,
             ),
-            "Budget_EUR": st.column_config.NumberColumn("Budget (EUR)", format="€%d"),
-            "Final_Total": st.column_config.NumberColumn("Final Total", format="%.1f"),
+            "Budget_EUR": st.column_config.NumberColumn(
+                "Budget (EUR)",
+                format="€%d",
+            ),
+            "Final_Total": st.column_config.NumberColumn(
+                "Final Total",
+                format="%.1f",
+            ),
         }
     )
 
@@ -1733,8 +1747,9 @@ with tab_buckets4:
     bucket_df = edited.copy()
     st.session_state["bucket4_df"] = bucket_df
 
-    # (OPTIONAL) if you also want other tabs (decision support etc.) to use these 4-bucket assignments:
-    # st.session_state["bucket_df"] = bucket_df
+    # 🔁 Sync 4-bucket assignments to the global bucket_df
+    # so other tabs (decision support, bands, etc.) also see these updates
+    st.session_state["bucket_df"] = bucket_df
 
     # ---------- 2) Download current assignments ----------
     st.markdown("### Export current 4-bucket assignments")
