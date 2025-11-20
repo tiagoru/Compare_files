@@ -246,7 +246,6 @@ with col4:
 st.markdown("---")
 
 # ===================== TABS =====================
-
 (
     tab_overview,
     tab_scores,
@@ -259,6 +258,7 @@ st.markdown("---")
     tab_bucket_bands,
     tab_dragdrop,
     tab_buckets4,
+    tab_buckets4_viz,
 ) = st.tabs(
     [
         "📁 Overview",
@@ -272,8 +272,10 @@ st.markdown("---")
         "💶 Buckets by funding band",
         "🖱️ Drag & drop buckets",
         "🏷️ Buckets (4 only)",
+        "📊 4-bucket visual board",
     ]
 )
+
 
 # ---------- TAB 1: OVERVIEW ----------
 with tab_overview:
@@ -1677,3 +1679,175 @@ with tab_buckets4:
                     )
     else:
         st.info("No bucket information available yet.")
+
+
+# ---------- NEW TAB: 4-BUCKET VISUAL BOARD ----------
+with tab_buckets4_viz:
+    st.subheader("📊 4-bucket visual board")
+
+    # 1) Get data from the 4-bucket tab or fallback
+    if "bucket4_df" in st.session_state:
+        vis_df = st.session_state["bucket4_df"].copy()
+    elif "bucket_df" in st.session_state:
+        # fallback if user hasn't used the 4-bucket tab yet
+        vis_df = st.session_state["bucket_df"].copy()
+    else:
+        st.info("No 4-bucket assignments available yet. Use the 'Buckets (4 only)' tab first.")
+        st.stop()
+
+    if "Bucket" not in vis_df.columns:
+        st.info("No 'Bucket' column found in the bucket data.")
+        st.stop()
+
+    vis_df = vis_df[vis_df["Bucket"].notna()].copy()
+    if vis_df.empty:
+        st.info("No projects assigned to any 4-bucket category yet.")
+        st.stop()
+
+    # Ensure numeric budget and score
+    if "Budget_EUR" in vis_df.columns:
+        vis_df["Budget_EUR"] = pd.to_numeric(vis_df["Budget_EUR"], errors="coerce").fillna(0)
+    else:
+        vis_df["Budget_EUR"] = 0
+
+    if "Final_Total" in vis_df.columns:
+        vis_df["Final_Total"] = pd.to_numeric(vis_df["Final_Total"], errors="coerce")
+    else:
+        vis_df["Final_Total"] = np.nan
+
+    # Nice default label for state (even if empty)
+    vis_df["State_clean"] = vis_df["State"].replace("", "No state").fillna("No state")
+
+    # ---------------------------------------
+    # 2) Treemap: Budget by Bucket → State → Project
+    # ---------------------------------------
+    st.markdown("### Treemap: budget by bucket, state and project")
+
+    if (vis_df["Budget_EUR"] > 0).any():
+        fig_tree = px.treemap(
+            vis_df,
+            path=["Bucket", "State_clean", "Project_Name"],
+            values="Budget_EUR",
+            color="Bucket",
+            hover_data={
+                "Project_ID": True,
+                "Budget_EUR": ":,.0f",
+                "Final_Total": ":.1f",
+            },
+        )
+    else:
+        # If budgets are missing/zero, fall back to a count-based treemap
+        fig_tree = px.treemap(
+            vis_df,
+            path=["Bucket", "State_clean", "Project_Name"],
+            color="Bucket",
+        )
+
+    fig_tree.update_layout(margin=dict(t=40, l=0, r=0, b=0))
+    st.plotly_chart(fig_tree, use_container_width=True)
+
+    # ---------------------------------------
+    # 3) Stacked bar: budget per state inside each bucket
+    # ---------------------------------------
+    st.markdown("### Stacked bar: budget per state in each bucket")
+
+    gb = (
+        vis_df
+        .groupby(["Bucket", "State_clean"], dropna=False)
+        .agg(total_budget=("Budget_EUR", "sum"))
+        .reset_index()
+    )
+
+    fig_bar = px.bar(
+        gb,
+        x="Bucket",
+        y="total_budget",
+        color="State_clean",
+        barmode="stack",
+        labels={
+            "total_budget": "Total budget (EUR)",
+            "State_clean": "State",
+        },
+        title="Budget split by state within each bucket",
+    )
+    fig_bar.update_layout(yaxis_tickformat=",.0f")
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+    # ---------------------------------------
+    # 4) Bubble chart: projects by score & budget, coloured by bucket/state
+    # ---------------------------------------
+    st.markdown("### Bubble chart: projects by score and budget")
+
+    if vis_df["Final_Total"].notna().any() and vis_df["Budget_EUR"].notna().any():
+        fig_scatter = px.scatter(
+            vis_df,
+            x="Final_Total",
+            y="Budget_EUR",
+            size="Budget_EUR",
+            color="Bucket",
+            symbol="State_clean",
+            hover_data=[
+                "Project_ID",
+                "Project_Name",
+                "Bucket",
+                "State_clean",
+                "Budget_EUR",
+            ],
+            labels={
+                "Final_Total": "Final score",
+                "Budget_EUR": "Budget (EUR)",
+                "State_clean": "State",
+            },
+            title="Projects by final score and budget (size = budget)",
+        )
+        fig_scatter.update_layout(yaxis_tickformat=",.0f")
+        st.plotly_chart(fig_scatter, use_container_width=True)
+    else:
+        st.info("Not enough data to plot score vs budget bubble chart.")
+
+    # ---------------------------------------
+    # 5) Vertical board: one section per bucket (no side-by-side columns)
+    # ---------------------------------------
+    st.markdown("### Vertical board: projects inside each 4-bucket")
+
+    for bucket_label in sorted(vis_df["Bucket"].dropna().unique()):
+        with st.expander(bucket_label, expanded=False):
+            sub = vis_df[vis_df["Bucket"] == bucket_label].copy()
+            if sub.empty:
+                st.caption("No projects assigned.")
+                continue
+
+            # Format budget & score for display
+            sub["Budget_fmt"] = sub["Budget_EUR"].apply(
+                lambda x: f"€{x:,.0f}" if pd.notna(x) else "—"
+            )
+            sub["Score_fmt"] = sub["Final_Total"].apply(
+                lambda x: f"{x:.1f}" if pd.notna(x) else "—"
+            )
+
+            cols_show = [
+                "Project_ID",
+                "Project_Name",
+                "Group",
+                "State_clean",
+                "Budget_fmt",
+                "Score_fmt",
+            ]
+            cols_show = [c for c in cols_show if c in sub.columns]
+
+            display_df = sub[cols_show].rename(
+                columns={
+                    "Project_ID": "ID",
+                    "Project_Name": "Project",
+                    "Group": "Group",
+                    "State_clean": "State",
+                    "Budget_fmt": "Budget",
+                    "Score_fmt": "Total points",
+                }
+            )
+
+            st.dataframe(display_df, use_container_width=True)
+
+            total_b = sub["Budget_EUR"].sum()
+            st.caption(f"Total bucket budget here: €{total_b:,.0f}")
+
