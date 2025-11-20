@@ -1084,6 +1084,7 @@ with tab_buckets:
         st.info("No bucket information available yet.")
 
 # ---------- NEW TAB: BUCKETS BY FUNDING BAND ----------
+# ---------- NEW TAB: BUCKETS BY FUNDING BAND ----------
 with tab_bucket_bands:
     st.subheader("💶 Buckets by funding band")
 
@@ -1110,7 +1111,9 @@ with tab_bucket_bands:
         band_df = st.session_state["bucket_df"].copy()
         st.info("Using current in-memory bucket assignments from the Buckets tab.")
     else:
-        st.warning("No bucket assignments available yet. Go to 'Buckets & prioritization' first, or upload a CSV.")
+        st.warning(
+            "No bucket assignments available yet. Go to 'Buckets & prioritization' first, or upload a CSV."
+        )
         st.stop()
 
     # Ensure Project_ID is string for joining
@@ -1165,7 +1168,9 @@ with tab_bucket_bands:
     summary["avg_score"] = summary["avg_score"].round(1)
     summary["total_budget_eur"] = summary["total_budget"].apply(lambda x: f"€{x:,.0f}")
 
-    summary_display = summary[["Bucket", "Funding_Band", "n_projects", "total_budget_eur", "avg_score"]].rename(
+    summary_display = summary[
+        ["Bucket", "Funding_Band", "n_projects", "total_budget_eur", "avg_score"]
+    ].rename(
         columns={
             "n_projects": "Projects",
             "total_budget_eur": "Total budget",
@@ -1175,16 +1180,88 @@ with tab_bucket_bands:
 
     st.dataframe(summary_display, use_container_width=True)
 
-    # 4) Optional: per-bucket breakdown in separate sections
+    # 4) Per-bucket, per-band project-level breakdown
     st.markdown("### Per-bucket funding band breakdown")
 
     for bucket_label in sorted(summary["Bucket"].dropna().unique()):
-        st.markdown(f"**{bucket_label}**")
+        st.markdown(f"#### {bucket_label}")
 
-        sub = summary_display[summary_display["Bucket"] == bucket_label].copy()
-        sub = sub.drop(columns=["Bucket"])
+        # ---- Aggregated view for this bucket (Bucket × Funding_Band) ----
+        sub_summary = summary_display[summary_display["Bucket"] == bucket_label].copy()
+        sub_summary = sub_summary.drop(columns=["Bucket"])
+        st.dataframe(sub_summary, use_container_width=True)
 
-        st.dataframe(sub, use_container_width=True)
+        # ---- Project-level view for this bucket, split by funding band ----
+        bucket_projects = band_df[band_df["Bucket"] == bucket_label].copy()
+        if bucket_projects.empty:
+            st.caption("No projects in this bucket.")
+            continue
+
+        # Ensure key columns exist
+        cols_base = [
+            "Project_ID",
+            "Project_Name",
+            "Funding_Band",
+            "Budget_EUR",
+            "Final_Total",
+            "Flag",
+            "State",
+        ]
+        cols_base = [c for c in cols_base if c in bucket_projects.columns]
+        bucket_projects = bucket_projects[cols_base].copy()
+
+        # Format budget & score for nicer display
+        if "Budget_EUR" in bucket_projects.columns:
+            bucket_projects["Budget"] = bucket_projects["Budget_EUR"].apply(
+                lambda x: f"€{x:,.0f}" if pd.notna(x) else "—"
+            )
+        else:
+            bucket_projects["Budget"] = "—"
+
+        if "Final_Total" in bucket_projects.columns:
+            bucket_projects["Total_points"] = bucket_projects["Final_Total"].apply(
+                lambda x: f"{x:.1f}" if pd.notna(x) else "—"
+            )
+        else:
+            bucket_projects["Total_points"] = "—"
+
+        # Order by Funding_Band then score (if available)
+        sort_cols = []
+        if "Funding_Band" in bucket_projects.columns:
+            sort_cols.append("Funding_Band")
+        if "Final_Total" in bucket_projects.columns:
+            sort_cols.append("Final_Total")
+
+        if sort_cols:
+            bucket_projects = bucket_projects.sort_values(
+                sort_cols, ascending=[True] * len(sort_cols)
+            )
+
+        # Build final display table
+        display_cols = []
+        for c in [
+            "Project_ID",
+            "Project_Name",
+            "Funding_Band",
+            "Flag",
+            "State",
+            "Budget",
+            "Total_points",
+        ]:
+            if c in bucket_projects.columns:
+                display_cols.append(c)
+
+        proj_display = bucket_projects[display_cols].rename(
+            columns={
+                "Project_ID": "ID",
+                "Project_Name": "Project title",
+                "Funding_Band": "Band",
+                "Total_points": "Total points",
+            }
+        )
+
+        st.markdown("**Project-level details in this bucket (by funding band)**")
+        st.dataframe(proj_display, use_container_width=True)
 
 
 # ---------- TAB 9: DRAG & DROP BUCKET BOARD ----------
