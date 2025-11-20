@@ -1567,6 +1567,244 @@ with tab_buckets4:
         st.dataframe(summary_display, use_container_width=True)
 
         # ---------- 4) Bucket board (projects inside each bucket) ----------
+       # ---------- NEW TAB: 4-BUCKET VIEW WITH EXTENDED STATES ----------
+with tab_buckets4:
+    st.subheader("🏷️ Buckets (4 only) & extended status")
+
+    # 4 buckets only
+    bucket_options = [
+        "1 - Priority multi-sport Paralympic",
+        "2 - Priority one-sport Paralympic",
+        "3 - Other para sports",
+        "4 - Others",
+    ]
+
+    # Extended state options
+    state_options = ["", "Approved", "Pending", "Revision", "3rd review needed", "Rejected"]
+
+    st.markdown(
+        "This tab uses 4 buckets (no 'Rejected' bucket) and a richer status field:\n\n"
+        "- **Bucket** = strategic category (1–4)\n"
+        "- **State** = workflow status: Approved, Pending, Revision, 3rd review needed, Rejected\n\n"
+        "You can edit buckets here, upload/download CSV, and see summaries."
+    )
+
+    # ---- CSV upload to resume work ----
+    upload_bucket_file = st.file_uploader(
+        "Upload previous 4-bucket assignments (CSV with at least Project_ID and Bucket)",
+        type="csv",
+        key="bucket4_assignments_upload",
+    )
+
+    # Base dataframe for current filtered projects
+    base_cols = ["Project_ID", "Project_Name", "Budget_EUR", "Final_Total", "Multi_Sport", "Category", "Group"]
+    base_cols = [c for c in base_cols if c in filtered_df.columns]
+    base_df = filtered_df[base_cols].copy()
+
+    # ---- Build or align bucket4_df in session_state ----
+    if "bucket4_df" in st.session_state:
+        prev = st.session_state["bucket4_df"]
+        if "Project_ID" in prev.columns:
+            prev = prev[["Project_ID", "Bucket", "Flag", "State"]].copy()
+            prev["Project_ID"] = prev["Project_ID"].astype(str)
+            base_df["Project_ID"] = base_df["Project_ID"].astype(str)
+
+            merged = base_df.merge(
+                prev,
+                on="Project_ID",
+                how="left",
+                suffixes=("", "_prev"),
+            )
+
+            # If no previous bucket, infer; otherwise keep old
+            merged["Bucket"] = merged["Bucket"].where(
+                merged["Bucket"].notna(),
+                merged.apply(infer_bucket, axis=1),
+            )
+
+            # Flags / states default
+            merged["Flag"] = merged["Flag"].fillna(False)
+            merged["State"] = merged["State"].fillna("")
+
+            bucket_df = merged[base_cols + ["Bucket", "Flag", "State"]].copy()
+        else:
+            # Fallback if prev somehow corrupted
+            bucket_df = base_df.copy()
+            bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+            bucket_df["Flag"] = False
+            bucket_df["State"] = ""
+    else:
+        # First time: infer buckets
+        bucket_df = base_df.copy()
+        bucket_df["Bucket"] = bucket_df.apply(infer_bucket, axis=1)
+        bucket_df["Flag"] = False
+        bucket_df["State"] = ""
+
+    # Coerce any buckets not in the 4-bucket set into "4 - Others"
+    valid_buckets = set(bucket_options)
+    bucket_df["Bucket"] = bucket_df["Bucket"].where(
+        bucket_df["Bucket"].isin(valid_buckets),
+        "4 - Others",
+    )
+
+    # ---- If CSV uploaded, override Bucket/Flag/State where IDs match ----
+    if upload_bucket_file is not None:
+        prev_csv = pd.read_csv(upload_bucket_file)
+
+        # We need at least Project_ID and Bucket
+        if "Project_ID" in prev_csv.columns and "Bucket" in prev_csv.columns:
+            prev_csv["Project_ID"] = prev_csv["Project_ID"].astype(str)
+            bucket_df["Project_ID"] = bucket_df["Project_ID"].astype(str)
+
+            # Build list of columns that actually exist in the CSV
+            merge_cols = ["Project_ID", "Bucket"]
+            if "Flag" in prev_csv.columns:
+                merge_cols.append("Flag")
+            if "State" in prev_csv.columns:
+                merge_cols.append("State")
+
+            prev_use = prev_csv[merge_cols].copy()
+
+            # Ensure Flag / State exist (even if they weren't in the CSV)
+            if "Flag" not in prev_use.columns:
+                prev_use["Flag"] = False
+            if "State" not in prev_use.columns:
+                prev_use["State"] = ""
+
+            # Merge CSV info onto current bucket_df
+            bucket_df = bucket_df.merge(
+                prev_use,
+                on="Project_ID",
+                how="left",
+                suffixes=("", "_csv"),
+            )
+
+            # Override bucket/flag/state with CSV values where they exist
+            for col in ["Bucket", "Flag", "State"]:
+                csv_col = col + "_csv"
+                if csv_col in bucket_df.columns:
+                    bucket_df[col] = bucket_df[csv_col].combine_first(bucket_df[col])
+
+            # Clean up temporary _csv columns
+            bucket_df.drop(
+                columns=[c for c in bucket_df.columns if c.endswith("_csv")],
+                inplace=True,
+            )
+
+            # After loading, again coerce any bucket not in the 4-bucket set to "4 - Others"
+            bucket_df["Bucket"] = bucket_df["Bucket"].where(
+                bucket_df["Bucket"].isin(valid_buckets),
+                "4 - Others",
+            )
+
+            st.success("Loaded previous 4-bucket assignments from CSV (for matching Project_IDs).")
+        else:
+            st.warning("CSV must contain at least 'Project_ID' and 'Bucket' columns.")
+
+    # ---------- 1) Interactive editor ----------
+    edited = st.data_editor(
+        bucket_df,
+        key="bucket4_editor",
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Bucket": st.column_config.SelectboxColumn(
+                "Bucket",
+                options=bucket_options,
+                required=True,
+            ),
+            "Flag": st.column_config.CheckboxColumn(
+                "Flag (selected?)",
+                default=False,
+            ),
+            "State": st.column_config.SelectboxColumn(
+                "State",
+                options=state_options,
+                required=False,
+            ),
+            "Budget_EUR": st.column_config.NumberColumn("Budget (EUR)", format="€%d"),
+            "Final_Total": st.column_config.NumberColumn("Final Total", format="%.1f"),
+        }
+    )
+
+    # 🔑 From here on, edited is the source of truth for this 4-bucket view
+    bucket_df = edited.copy()
+    st.session_state["bucket4_df"] = bucket_df
+
+    # (OPTIONAL) if you also want other tabs (decision support etc.) to use these 4-bucket assignments:
+    # st.session_state["bucket_df"] = bucket_df
+
+    # ---------- 2) Download current assignments ----------
+    st.markdown("### Export current 4-bucket assignments")
+    export_cols = [
+        c
+        for c in ["Project_ID", "Project_Name", "Bucket", "Flag", "State", "Budget_EUR", "Final_Total"]
+        if c in bucket_df.columns
+    ]
+    export_csv = bucket_df[export_cols].to_csv(index=False)
+    st.download_button(
+        "Download 4-bucket assignments CSV",
+        data=export_csv,
+        file_name="bucket4_assignments.csv",
+        mime="text/csv",
+    )
+
+    # ---------- 3) Summary per bucket (with states + flags) ----------
+    if "Bucket" in bucket_df.columns:
+        summary = (
+            bucket_df
+            .groupby("Bucket", dropna=False)
+            .agg(
+                n_projects=("Project_ID", "nunique"),
+                total_budget=("Budget_EUR", "sum"),
+                avg_score=("Final_Total", "mean"),
+                n_approved=("State", lambda s: (s == "Approved").sum()),
+                n_pending=("State", lambda s: (s == "Pending").sum()),
+                n_revision=("State", lambda s: (s == "Revision").sum()),
+                n_third=("State", lambda s: (s == "3rd review needed").sum()),
+                n_rejected=("State", lambda s: (s == "Rejected").sum()),
+                n_flagged=("Flag", lambda x: (x == True).sum()),
+            )
+            .reset_index()
+        )
+
+        st.markdown("### 4-bucket summary (totals, states, flagged)")
+
+        summary_display = summary.copy()
+        summary_display["total_budget"] = summary_display["total_budget"].fillna(0)
+        summary_display["avg_score"] = summary_display["avg_score"].round(1)
+        summary_display["total_budget_eur"] = summary_display["total_budget"].apply(
+            lambda x: f"€{x:,.0f}"
+        )
+
+        summary_display = summary_display[
+            [
+                "Bucket",
+                "n_projects",
+                "total_budget_eur",
+                "avg_score",
+                "n_approved",
+                "n_pending",
+                "n_revision",
+                "n_third",
+                "n_rejected",
+                "n_flagged",
+            ]
+        ].rename(
+            columns={
+                "n_projects": "Total projects",
+                "n_approved": "Approved",
+                "n_pending": "Pending",
+                "n_revision": "Revision",
+                "n_third": "3rd review",
+                "n_rejected": "Rejected",
+                "n_flagged": "Flagged",
+            }
+        )
+
+        st.dataframe(summary_display, use_container_width=True)
+
+        # ---------- 4) Bucket board (projects inside each bucket) ----------
         st.markdown("### 4-bucket board (projects inside each bucket)")
 
         cols_vis = st.columns(4)
