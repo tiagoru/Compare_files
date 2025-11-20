@@ -735,58 +735,38 @@ with tab_comments:
 # ---------- TAB 7: DECISION SUPPORT ----------
 # ---------- TAB 7: DECISION SUPPORT ----------
 with tab_decision:
-    st.subheader("🧠 Decision-support ranking")
+    st.subheader("🧠 Decision-support ranking (0–1 normalized weights)")
 
-    # Base dataframe for decision scoring: start from filtered_df
+    # Base dataframe for decision scoring
     dec_df = filtered_df.copy()
 
-    # Bring in Bucket + Funding_Band from bucket_df if available
-    if "bucket_df" in st.session_state and "Project_ID" in st.session_state["bucket_df"].columns:
-        bucket_df_dec = st.session_state["bucket_df"].copy()
+    # Merge bucket + band info from session bucket_df
+    if "bucket_df" in st.session_state:
+        bdf = st.session_state["bucket_df"].copy()
+        bdf["Project_ID"] = bdf["Project_ID"].astype(str)
+        dec_df["Project_ID"] = dec_df["Project_ID"].astype(str)
 
-        # Make sure IDs are strings for a clean merge
-        if "Project_ID" in bucket_df_dec.columns:
-            bucket_df_dec["Project_ID"] = bucket_df_dec["Project_ID"].astype(str)
-        if "Project_ID" in dec_df.columns:
-            dec_df["Project_ID"] = dec_df["Project_ID"].astype(str)
-
-        # Only keep relevant columns from bucket_df
-        cols_join = ["Project_ID"]
+        keep_cols = ["Project_ID"]
         for c in ["Bucket", "Funding_Band"]:
-            if c in bucket_df_dec.columns:
-                cols_join.append(c)
+            if c in bdf.columns:
+                keep_cols.append(c)
 
-        bucket_meta = bucket_df_dec[cols_join].drop_duplicates("Project_ID")
-        dec_df = dec_df.merge(bucket_meta, on="Project_ID", how="left", suffixes=("", "_bucket"))
-    else:
-        # No bucket_df yet; we can still infer bucket from rules as a fallback
-        if "Bucket" not in dec_df.columns:
-            dec_df["Bucket"] = dec_df.apply(infer_bucket, axis=1)
+        meta = bdf[keep_cols].drop_duplicates("Project_ID")
+        dec_df = dec_df.merge(meta, on="Project_ID", how="left")
 
-    # If some rows still have no Bucket, infer a default
-    if "Bucket" in dec_df.columns:
-        mask_no_bucket = dec_df["Bucket"].isna()
-        if mask_no_bucket.any():
-            dec_df.loc[mask_no_bucket, "Bucket"] = dec_df[mask_no_bucket].apply(infer_bucket, axis=1)
-    else:
+    # Fallback if bucket missing
+    if "Bucket" not in dec_df.columns:
         dec_df["Bucket"] = dec_df.apply(infer_bucket, axis=1)
 
-    # ---------- Weight controls ----------
-    st.markdown("### Weight settings")
+    st.markdown("### Global weight sliders (0 → 1)")
 
-    # 1) Weight for Final_Total
-    score_weight = st.slider(
-        "Weight for Final_Total (base performance score)",
-        min_value=0.0,
-        max_value=2.0,
-        value=1.0,
-        step=0.1,
-    )
+    w_score  = st.slider("Weight of Final Score",  0.0, 1.0, 0.6, 0.05)
+    w_bucket = st.slider("Weight of Bucket",       0.0, 1.0, 0.3, 0.05)
+    w_band   = st.slider("Weight of Funding Band", 0.0, 1.0, 0.1, 0.05)
 
-    # 2) Bucket weights (additive bonuses/penalties)
-    st.markdown("**Bucket weights (additive bonus/penalty)**")
+    st.markdown("---")
+    st.markdown("### Bucket priority weights (0 → 1)")
 
-    # Default ordering of buckets
     default_bucket_order = [
         "1 - Priority multi-sport Paralympic",
         "2 - Priority one-sport Paralympic",
@@ -795,82 +775,58 @@ with tab_decision:
         "5 - Rejected / Not recommended",
     ]
 
-    # Which buckets actually appear in the current data
-    buckets_in_data = sorted(dec_df["Bucket"].dropna().unique().tolist())
-    bucket_order = [b for b in default_bucket_order if b in buckets_in_data] + \
-                   [b for b in buckets_in_data if b not in default_bucket_order]
+    bucket_vals = {}
+    for b in default_bucket_order:
+        if b.startswith("1 "): default = 1.00
+        elif b.startswith("2 "): default = 0.75
+        elif b.startswith("3 "): default = 0.50
+        elif b.startswith("4 "): default = 0.25
+        else: default = 0.00
 
-    bucket_weight = {}
-    for b in bucket_order:
-        # sensible defaults: 10 > 7 > 4 > 1 > -5
-        if b.startswith("1 "):
-            default_val = 10
-        elif b.startswith("2 "):
-            default_val = 7
-        elif b.startswith("3 "):
-            default_val = 4
-        elif b.startswith("4 "):
-            default_val = 1
-        elif b.startswith("5 "):
-            default_val = -5
-        else:
-            default_val = 0
-
-        bucket_weight[b] = st.slider(
-            f"Bucket weight for '{b}'",
-            min_value=-20,
-            max_value=20,
-            value=default_val,
-            step=1,
+        bucket_vals[b] = st.slider(
+            f"Bucket weight: {b}",
+            min_value=0.0,
+            max_value=1.0,
+            value=default,
+            step=0.05
         )
 
-    # 3) Funding band weights (if available)
-    band_weight = {}
-    if "Funding_Band" in dec_df.columns and dec_df["Funding_Band"].notna().any():
-        st.markdown("**Funding band weights (additive bonus/penalty)**")
-        bands_in_data = sorted(dec_df["Funding_Band"].dropna().unique().tolist())
-        for band in bands_in_data:
-            band_weight[band] = st.slider(
-                f"Weight for funding band '{band}'",
-                min_value=-10,
-                max_value=10,
-                value=0,
-                step=1,
+    st.markdown("---")
+    st.markdown("### Funding band weights (0 → 1)")
+
+    band_vals = {}
+    if "Funding_Band" in dec_df.columns:
+        for fb in sorted(dec_df["Funding_Band"].dropna().unique()):
+            band_vals[fb] = st.slider(
+                f"Funding band weight: {fb}",
+                0.0, 1.0, 0.5, 0.05
             )
     else:
-        st.info("No 'Funding_Band' column available for weighting bands.")
-        bands_in_data = []
-
-    # ---------- Compute decision score ----------
-    # Base score from Final_Total
+        st.info("No funding band info found.")
+    
+    # ---------- Normalize Final_Total ----------
     if "Final_Total" in dec_df.columns:
-        final_total = dec_df["Final_Total"].fillna(0)
+        s_min = dec_df["Final_Total"].min()
+        s_max = dec_df["Final_Total"].max()
+        dec_df["Score_norm"] = (dec_df["Final_Total"] - s_min) / (s_max - s_min)
     else:
-        final_total = pd.Series(0, index=dec_df.index)
+        dec_df["Score_norm"] = 0
 
-    # Bucket contribution
-    dec_df["Bucket_weight"] = dec_df["Bucket"].map(bucket_weight).fillna(0)
+    # ---------- Assign bucket/band numeric weights ----------
+    dec_df["Bucket_norm"] = dec_df["Bucket"].map(bucket_vals).fillna(0)
+    dec_df["Band_norm"]   = dec_df["Funding_Band"].map(band_vals).fillna(0)
 
-    # Band contribution
-    if bands_in_data:
-        dec_df["Band_weight"] = dec_df["Funding_Band"].map(band_weight).fillna(0)
-    else:
-        dec_df["Band_weight"] = 0
+    # ---------- Compute final decision score ----------
+    dec_df["Decision_Score"] = (
+        dec_df["Score_norm"]  * w_score +
+        dec_df["Bucket_norm"] * w_bucket +
+        dec_df["Band_norm"]   * w_band
+    ) * 100   # scale to 0–100
 
-    # Final decision score formula:
-    # Decision_Score = Final_Total * score_weight + Bucket_weight + Band_weight
-    dec_df["Decision_Score"] = final_total * score_weight + dec_df["Bucket_weight"] + dec_df["Band_weight"]
+    st.markdown("### Final Ranking (0–100)")
+    top_n = st.slider("How many projects to display?", 5, min(50, len(dec_df)), 15)
 
-    # ---------- Display ranked projects ----------
-    st.markdown("### Ranking with bucket & band weights")
-
-    # Limit number of projects shown
-    max_n = min(50, len(dec_df))
-    top_n = st.slider("Number of projects to display", 5, max_n, min(10, max_n))
-
-    ranked = dec_df.sort_values("Decision_Score", ascending=False).head(top_n)
-
-    show_cols = [c for c in [
+    show_cols = [
         "Project_ID",
         "Project_Name",
         "Decision_Score",
@@ -878,20 +834,19 @@ with tab_decision:
         "Bucket",
         "Funding_Band",
         "Budget_EUR",
-        "Methods_avg",
-        "Impact_avg",
-        "Innovation_avg",
-        "Plan_avg",
-        "Team_avg",
-    ] if c in ranked.columns]
+    ]
 
-    st.dataframe(ranked[show_cols], use_container_width=True)
+    st.dataframe(
+        dec_df.sort_values("Decision_Score", ascending=False).head(top_n)[show_cols],
+        use_container_width=True
+    )
 
     st.caption(
-        "Decision_Score = Final_Total × weight_for_Final_Total "
-        "+ bucket_weight(bucket) + band_weight(Funding_Band). "
-        "Adjust the sliders above to change the importance of performance vs. bucket vs. funding band."
+        "Decision Score = normalized Final Score × weight_score "
+        "+ Bucket_weight × weight_bucket "
+        "+ Band_weight × weight_band"
     )
+
 
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
 # ---------- TAB 8: BUCKETS & PRIORITIZATION ----------
